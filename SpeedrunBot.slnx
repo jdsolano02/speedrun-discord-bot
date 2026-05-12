@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="SpeedrunBot.Application/SpeedrunBot.Application.csproj" />
+  <Project Path="SpeedrunBot.Domain/SpeedrunBot.Domain.csproj" />
+  <Project Path="SpeedrunBot.Infrastructure/SpeedrunBot.Infrastructure.csproj" />
+  <Project Path="SpeedrunBot.Worker/SpeedrunBot.Worker.csproj" />
+</Solution>

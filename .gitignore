@@ -1,0 +1,34 @@
+# ==================================
+# 1. Carpetas de compilación de .NET
+# ==================================
+bin/
+obj/
+
+# ==================================
+# 2. Archivos de IDE y usuario
+# ==================================
+.vs/
+*.user
+*.suo
+*.vscode/
+
+# ==================================
+# 3. SECRETOS (¡NUNCA SUBIR ESTO!)
+# ==================================
+appsettings.json
+appsettings.Development.json
+secrets.json
+
+# ==================================
+# 4. Bases de datos locales
+# ==================================
+runs_database.json
+*.db
+*.sqlite
+
+# ==================================
+# 5. Backups y archivos de estado locales
+# ==================================
+*_old.json
+scan_state.txt
+synced_runners.txt
