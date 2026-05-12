@@ -7,7 +7,7 @@ namespace SpeedrunBot.Worker;
 // Main background service that handles the periodic scanning of speedruns.
 public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : BackgroundService
 {
-    private const string StateFile = "data/scan_state.txt"; // File to persist scanning progress.
+    private const string StateFile = "data/scan_state.txt";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -15,10 +15,8 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
         using PeriodicTimer scanTimer = new(TimeSpan.FromMinutes(10));
 
-        // Immediate first run on startup
         await RunScanningCycleAsync(stoppingToken);
 
-        // Periodic loop
         while (!stoppingToken.IsCancellationRequested && await scanTimer.WaitForNextTickAsync(stoppingToken))
         {
             await RunScanningCycleAsync(stoppingToken);
@@ -37,25 +35,20 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
             using var scope = serviceProvider.CreateScope();
             var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
             var checker = scope.ServiceProvider.GetRequiredService<CheckForNewRecords>();
+            var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>(); // Alert Notifier
 
             var gamesToScan = await gameRepo.GetTrackedGamesAsync();
             if (gamesToScan.Count == 0) return;
 
-            // Restore last saved index to resume progress if the bot restarted
             int startIndex = 0;
             if (File.Exists(StateFile) && int.TryParse(await File.ReadAllTextAsync(StateFile), out int savedIndex))
             {
                 startIndex = savedIndex >= gamesToScan.Count ? 0 : savedIndex;
             }
 
-            if (startIndex > 0)
-            {
-                logger.LogInformation("💾 State recovered. Resuming scan from ID #{index}", startIndex);
-            }
-
             int chunkSize = 50;
 
-            // --- ADAPTIVE GEARBOX VARIABLES (Throttling logic) ---
+            // ADAPTIVE GEARBOX VARIABLES
             int maxConcurrentTasks = 5;
             int currentDelayMs = 2000;
             int successStreak = 0;
@@ -69,15 +62,13 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 var currentChunk = gamesToScan.Skip(i).Take(chunkSize).ToArray();
                 int currentEnd = i + currentChunk.Length;
 
-                logger.LogInformation("📡 Progress: [{current}/{total}] IDs scanned. Elapsed: {time}",
-                    currentEnd, gamesToScan.Count, stopwatch.Elapsed.ToString(@"hh\:mm\:ss"));
+                logger.LogInformation("📡 Progress: [{current}/{total}] IDs scanned.", currentEnd, gamesToScan.Count);
 
                 using var semaphore = new SemaphoreSlim(maxConcurrentTasks);
 
                 var tasks = currentChunk.Select(async gameId =>
                 {
                     await semaphore.WaitAsync(stoppingToken);
-
                     try
                     {
                         bool isProcessed = false;
@@ -90,12 +81,11 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                             try
                             {
-                                logger.LogInformation("➡️ Analyzing game: {id} (Attempt {i}/{max})...", gameId, attempts + 1, maxAttempts);
                                 await checker.ExecuteAsync("cr", new[] { gameId });
-
                                 await Task.Delay(currentDelayMs, stoppingToken);
 
-                                // SUCCESS: Increase streak and evaluate if we can speed up
+                                // SUCCESS: Increase streak
+                                bool notifyUpshift = false;
                                 lock (syncLock)
                                 {
                                     successStreak++;
@@ -105,46 +95,54 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                                         if (maxConcurrentTasks < 5) { maxConcurrentTasks++; changed = true; }
                                         if (currentDelayMs > 2000) { currentDelayMs -= 500; changed = true; }
 
-                                        if (changed)
-                                        {
-                                            logger.LogInformation("🚀 OPTIMIZATION: Success streak detected. Increasing to {threads} threads and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
-                                        }
+                                        if (changed) notifyUpshift = true;
                                         successStreak = 0;
                                     }
                                 }
+
+                                if (notifyUpshift)
+                                {
+                                    logger.LogInformation("🚀 OPTIMIZATION: Increasing to {threads} threads and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
+                                    await notifier.SendSystemAlertAsync($"🚀 **Gearbox Upshift:** {maxConcurrentTasks} threads | {currentDelayMs}ms delay.");
+                                }
+
                                 isProcessed = true;
                             }
                             catch (TaskCanceledException)
                             {
-                                logger.LogWarning("⚠️ Timeout on game {id}. Skipping...", gameId);
                                 break;
                             }
                             catch (Exception ex)
                             {
-                                // API Rate Limit detection (429 or unofficial 420)
+                                // API Rate Limit detection
                                 if (ex.Message.Contains("420") || ex.Message.Contains("429"))
                                 {
                                     attempts++;
+                                    bool notifyDownshift = false;
+
                                     lock (syncLock)
                                     {
-                                        successStreak = 0; // Reset streak on error
+                                        successStreak = 0;
                                         if ((DateTime.Now - lastThrottleTime).TotalSeconds > 60)
                                         {
                                             lastThrottleTime = DateTime.Now;
                                             if (maxConcurrentTasks > 1) maxConcurrentTasks -= 2;
                                             if (maxConcurrentTasks < 1) maxConcurrentTasks = 1;
                                             currentDelayMs += 1000;
-
-                                            logger.LogWarning("⚙️ AUTO-ADJUST: Throttling down to {threads} thread(s) and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
+                                            notifyDownshift = true;
                                         }
                                     }
 
-                                    logger.LogWarning("⏳ Rate limit hit on {id}. Cooling down 60s...", gameId);
+                                    if (notifyDownshift)
+                                    {
+                                        logger.LogWarning("⚙️ AUTO-ADJUST: Throttling down to {threads} thread(s) and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
+                                        await notifier.SendSystemAlertAsync($"⚠️ **Gearbox Downshift (Rate Limit):** {maxConcurrentTasks} threads | {currentDelayMs}ms delay.");
+                                    }
+
                                     await Task.Delay(60000, stoppingToken);
                                 }
                                 else
                                 {
-                                    logger.LogWarning("⚠️ Unexpected error on game {id}: {msg}", gameId, ex.Message);
                                     break;
                                 }
                             }
@@ -158,21 +156,20 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                 await Task.WhenAll(tasks);
 
-                // Save progress after each chunk
+                // Save progress and alert chunk completion
                 int nextIndex = i + chunkSize;
                 await File.WriteAllTextAsync(StateFile, nextIndex.ToString(), stoppingToken);
+                await notifier.SendSystemAlertAsync($"📦 **Chunk Completed:** [{currentEnd}/{gamesToScan.Count}] scanned.");
 
-                if (nextIndex < gamesToScan.Count)
-                {
-                    await Task.Delay(currentDelayMs, stoppingToken);
-                }
+                if (nextIndex < gamesToScan.Count) await Task.Delay(currentDelayMs, stoppingToken);
             }
 
             if (!stoppingToken.IsCancellationRequested)
             {
                 stopwatch.Stop();
-                await File.WriteAllTextAsync(StateFile, "0", stoppingToken); // Reset state on completion
-                logger.LogInformation("✅ Cycle completed 100%. Total time: {time}", stopwatch.Elapsed.ToString(@"hh\:mm\:ss"));
+                await File.WriteAllTextAsync(StateFile, "0", stoppingToken);
+                logger.LogInformation("✅ Cycle completed 100%.");
+                await notifier.SendSystemAlertAsync($"🏁 **Scan Cycle 100% Completed.** Time: {stopwatch.Elapsed.ToString(@"hh\:mm\:ss")}");
             }
         }
         catch (Exception ex)

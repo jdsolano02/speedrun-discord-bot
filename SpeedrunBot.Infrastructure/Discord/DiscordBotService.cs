@@ -13,13 +13,13 @@ using System.Linq;
 
 namespace SpeedrunBot.Infrastructure.Discord;
 
-// Main service to handle Discord interactions, slash commands, and notifications.
 public class DiscordBotService : IHostedService, IDiscordNotifier
 {
     private readonly DiscordSocketClient _client;
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly string _botToken;
+    private readonly ulong _adminChannelId; // Private alerts channel
     private readonly string _syncedRunnersPath = "data/synced_runners.txt";
 
     public DiscordBotService(IServiceProvider serviceProvider, IConfiguration configuration)
@@ -27,6 +27,9 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         _serviceProvider = serviceProvider;
         _configuration = configuration;
         _botToken = _configuration["DiscordSettings:BotToken"] ?? throw new Exception("BotToken not found.");
+
+        // Default to 0 if variable is not set in Railway
+        _adminChannelId = ulong.TryParse(_configuration["DiscordSettings:AdminChannelId"], out var id) ? id : 0;
 
         _client = new DiscordSocketClient(new DiscordSocketConfig
         {
@@ -47,48 +50,38 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
 
     public async Task StopAsync(CancellationToken cancellationToken) => await _client.StopAsync();
 
-    // Registers and updates all global slash commands.
     private Task Client_Ready()
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                Console.WriteLine("DEBUG [1/5]: Discord Ready Event Fired. Waiting 3 seconds...");
                 await Task.Delay(3000);
 
-                Console.WriteLine("DEBUG [2/5]: Building command definitions...");
-
-                // 1. SETUP: Configuration (All fields REQUIRED)
                 var setupCommand = new SlashCommandBuilder().WithName("setup").WithDescription("Configure bot channels and roles for this server.")
                     .AddOption("new_records_announcement", ApplicationCommandOptionType.Channel, "Channel for record notifications.", isRequired: true)
                     .AddOption("rankings", ApplicationCommandOptionType.Channel, "Channel for ranking and player commands.", isRequired: true)
                     .AddOption("registro", ApplicationCommandOptionType.Channel, "Channel for the register command.", isRequired: true)
                     .AddOption("player_count", ApplicationCommandOptionType.Channel, "Channel for the census embed.", isRequired: true)
                     .AddOption("rol_data_helpers", ApplicationCommandOptionType.Role, "Role allowed to manage runner data.", isRequired: true)
+                    .AddOption("rol_notificaciones_nr", ApplicationCommandOptionType.Role, "Role to ping for National Records.", isRequired: false)
                     .WithDefaultMemberPermissions(GuildPermission.Administrator);
 
-                // 1.5 UPDATE: Update configuration (All fields OPTIONAL)
                 var updateCommand = new SlashCommandBuilder().WithName("update").WithDescription("Update specific bot channels or roles.")
                     .AddOption("new_records_announcement", ApplicationCommandOptionType.Channel, "Channel for record notifications.", isRequired: false)
                     .AddOption("rankings", ApplicationCommandOptionType.Channel, "Channel for ranking and player commands.", isRequired: false)
                     .AddOption("registro", ApplicationCommandOptionType.Channel, "Channel for the register command.", isRequired: false)
                     .AddOption("player_count", ApplicationCommandOptionType.Channel, "Channel for the census embed.", isRequired: false)
                     .AddOption("rol_data_helpers", ApplicationCommandOptionType.Role, "Role allowed to manage runner data.", isRequired: false)
+                    .AddOption("rol_notificaciones_nr", ApplicationCommandOptionType.Role, "Role to ping for National Records.", isRequired: false)
                     .WithDefaultMemberPermissions(GuildPermission.Administrator);
 
-                // 2. REGISTER: Runner management subcommands.
                 var registerCommand = new SlashCommandBuilder().WithName("register").WithDescription("Manage the speedrunner database.")
-                    .AddOption(new SlashCommandOptionBuilder()
-                        .WithName("usuario")
-                        .WithDescription("Register a new runner by their Speedrun.com name.")
-                        .WithType(ApplicationCommandOptionType.SubCommand)
-                        .AddOption("nombre", ApplicationCommandOptionType.String, "Speedrun.com username.", isRequired: true, isAutocomplete: true) // <--- ESTO FALTABA
-                    )
+                    .AddOption(new SlashCommandOptionBuilder().WithName("usuario").WithDescription("Register a new runner by their Speedrun.com name.").WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("nombre", ApplicationCommandOptionType.String, "Speedrun.com username.", isRequired: true, isAutocomplete: true))
                     .AddOption(new SlashCommandOptionBuilder().WithName("pending").WithDescription("Sync discovered runners not yet in the system (Data Helpers).").WithType(ApplicationCommandOptionType.SubCommand))
                     .AddOption(new SlashCommandOptionBuilder().WithName("all").WithDescription("Force a full resync of all registered runners (Admin only).").WithType(ApplicationCommandOptionType.SubCommand));
 
-                // 3. PUBLIC, UTILITY & DEV COMMANDS
                 var rankCommand = new SlashCommandBuilder().WithName("ranking").WithDescription("Show national rankings.")
                     .AddOption("juego", ApplicationCommandOptionType.String, "Game title", isRequired: true, isAutocomplete: true)
                     .AddOption("categoria", ApplicationCommandOptionType.String, "Category or 'ALL_CATEGORIES'", isRequired: true, isAutocomplete: true);
@@ -101,39 +94,30 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var playersCommand = new SlashCommandBuilder().WithName("players").WithDescription("Show registered runners list.")
                     .AddOption(new SlashCommandOptionBuilder().WithName("lista").WithDescription("Select the list view mode.").WithType(ApplicationCommandOptionType.String).AddChoice("Full List", "all").AddChoice("Unsynced Runners", "unsynced"));
 
-                var trackCommand = new SlashCommandBuilder().WithName("track").WithDescription("Add a game to the scanning watchlist (Admin).")
-                    .AddOption("juego", ApplicationCommandOptionType.String, "Speedrun.com abbreviation", isRequired: true);
+                // NEW: /game Command Structure
+                var gameCommand = new SlashCommandBuilder().WithName("game").WithDescription("Manage and view monitored games.")
+                    .AddOption(new SlashCommandOptionBuilder().WithName("add").WithDescription("Add a game to watchlist (DataTakers).").WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("id_src", ApplicationCommandOptionType.String, "Speedrun.com Abbreviation", isRequired: true))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("delete").WithDescription("Remove a game from watchlist (DataTakers).").WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("id_src", ApplicationCommandOptionType.String, "Speedrun.com Abbreviation to delete", isRequired: true))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("list").WithDescription("Export full list of tracked games (.txt).").WithType(ApplicationCommandOptionType.SubCommand))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("recent").WithDescription("Top 15 games with most recent CR runs.").WithType(ApplicationCommandOptionType.SubCommand))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("most_played").WithDescription("Top games by number of CR runners.").WithType(ApplicationCommandOptionType.SubCommand));
 
                 var helpCommand = new SlashCommandBuilder().WithName("help").WithDescription("Display the user guide.");
-                var devCommand = new SlashCommandBuilder().WithName("dev").WithDescription("Información sobre el desarrollador y apoyo al proyecto.");
+                var devCommand = new SlashCommandBuilder().WithName("dev").WithDescription("Información sobre el desarrollador.");
 
-                Console.WriteLine("DEBUG [3/5]: Packaging commands into array...");
                 var commands = new ApplicationCommandProperties[]
                 {
-                    setupCommand.Build(),
-                    updateCommand.Build(),
-                    registerCommand.Build(),
-                    rankCommand.Build(),
-                    nrCommand.Build(),
-                    playerCommand.Build(),
-                    playersCommand.Build(),
-                    trackCommand.Build(),
-                    helpCommand.Build(),
-                    devCommand.Build()
+                    setupCommand.Build(), updateCommand.Build(), registerCommand.Build(), rankCommand.Build(),
+                    nrCommand.Build(), playerCommand.Build(), playersCommand.Build(), gameCommand.Build(),
+                    helpCommand.Build(), devCommand.Build()
                 };
 
-                Console.WriteLine($"DEBUG [4/5]: Sending {commands.Length} commands to Discord API...");
                 await _client.BulkOverwriteGlobalApplicationCommandsAsync(commands);
-
-                Console.WriteLine("✅ DEBUG [5/5]: Global commands successfully initialized!");
-
                 await UpdateAllGuildPlayerCounts();
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ CRITICAL REGISTRATION ERROR: {ex.Message}");
-                Console.WriteLine(ex.StackTrace);
-            }
+            catch (Exception ex) { Console.WriteLine($"❌ CRITICAL REGISTRATION ERROR: {ex.Message}"); }
         });
 
         return Task.CompletedTask;
@@ -155,11 +139,10 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
         bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
 
-        // --- COMMAND LOGIC ---
-
+        // Setup & Update Logic
         if (command.CommandName == "setup" || command.CommandName == "update")
         {
-            if (!isAdmin) { await command.FollowupAsync("🚫 Permisos insuficientes (Admin/Owner required)."); return; }
+            if (!isAdmin) { await command.FollowupAsync("🚫 Permisos insuficientes."); return; }
             var config = gConfig ?? new GuildConfig { GuildId = guildId };
             if (db.Entry(config).State == Microsoft.EntityFrameworkCore.EntityState.Detached) db.GuildConfigs.Add(config);
 
@@ -168,6 +151,9 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             if (command.Data.Options.FirstOrDefault(x => x.Name == "registro")?.Value is IChannel chReg) config.RegisterChannelId = chReg.Id;
             if (command.Data.Options.FirstOrDefault(x => x.Name == "player_count")?.Value is IChannel chC) config.PlayersChannelId = chC.Id;
             if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_data_helpers")?.Value is IRole rDH) config.DataMakerRoleId = rDH.Id;
+
+            // Assign NR Ping Role
+            if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_notificaciones_nr")?.Value is IRole rNR) config.NrPingRoleId = rNR.Id;
 
             await db.SaveChangesAsync();
 
@@ -183,7 +169,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             }
             else
             {
-                await command.FollowupAsync("✅ **Configuración del servidor actualizada correctamente.**");
+                await command.FollowupAsync("✅ **Configuración actualizada.**");
             }
 
             await UpdateAllGuildPlayerCounts();
@@ -192,18 +178,80 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
 
         if (command.CommandName == "dev")
         {
-            var devInfo = "*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n" +
-                          "*Si quieres apoyar a mantener corriendo el bot de manera gratuita para toda la comunidad, considera dejar tu propina aquí:* https://streamelements.com/realxones/tip \n" +
-                          "Puedes revisar la documentación del bot aquí: https://github.com/jdsolano02/speedrun-discord-bot \n" +
-                          "También revisa mis redes sociales: https://linktr.ee/Xones \n" +
-                          "**¡Muchas gracias por tu apoyo!**";
-
-            await command.FollowupAsync(devInfo);
+            await command.FollowupAsync("*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n*Apoya el bot:* https://streamelements.com/realxones/tip \nGithub: https://github.com/jdsolano02/speedrun-discord-bot");
             return;
         }
 
         if (gConfig == null) { await command.FollowupAsync("⚠️ El bot no está configurado. Un admin debe usar `/setup`."); return; }
 
+        // NEW: Game Command Logic
+        if (command.CommandName == "game")
+        {
+            var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
+            var subCommand = command.Data.Options.First();
+
+            switch (subCommand.Name)
+            {
+                case "add":
+                    if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
+                    var idAdd = subCommand.Options.First().Value.ToString()!;
+                    await gameRepo.AddGameAsync(idAdd);
+                    await command.FollowupAsync($"✅ Juego `{idAdd}` añadido a la cola de escaneo.");
+                    break;
+
+                case "delete":
+                    if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
+                    var idDel = subCommand.Options.First().Value.ToString()!;
+                    await gameRepo.DeleteGameAsync(idDel);
+                    await command.FollowupAsync($"🗑️ Juego `{idDel}` eliminado de la base de datos.");
+                    break;
+
+                case "list":
+                    var trackedIds = await gameRepo.GetTrackedGamesAsync();
+                    var allRunsForNames = await repo.GetRankingAsync("", "");
+
+                    var gamesList = trackedIds.Select(id => {
+                        var run = allRunsForNames.FirstOrDefault(r => r.GameId == id);
+                        return run != null ? $"{run.GameFullName} ({id})" : id;
+                    }).OrderBy(g => g).ToList();
+
+                    var content = string.Join("\r\n", gamesList);
+                    using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(content)))
+                    {
+                        await command.FollowupWithFileAsync(stream, "juegos_cr.txt", $"📄 Lista de los **{gamesList.Count}** juegos monitoreados.");
+                    }
+                    break;
+
+                case "recent":
+                    var allForRecent = await repo.GetRankingAsync("", "");
+                    var recentGames = allForRecent
+                        .Where(r => r.DateSubmitted.HasValue)
+                        .OrderByDescending(r => r.DateSubmitted)
+                        .Select(r => r.GameFullName)
+                        .Distinct()
+                        .Take(15);
+
+                    var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
+                        .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
+                    await command.FollowupAsync(embed: embedR.Build());
+                    break;
+
+                case "most_played":
+                    var allForTop = await repo.GetRankingAsync("", "");
+                    var topGames = allForTop.GroupBy(r => r.GameFullName)
+                        .Select(g => new { Name = g.Key, Players = g.Select(r => r.RunnerId).Distinct().Count() })
+                        .OrderByDescending(x => x.Players)
+                        .Take(20);
+
+                    var embedTop = new EmbedBuilder().WithTitle("🔥 Juegos Más Jugados").WithColor(Color.Orange)
+                        .WithDescription(string.Join("\n", topGames.Select((g, i) => $"{i + 1}. **{g.Name}** ({g.Players} runners)")));
+                    await command.FollowupAsync(embed: embedTop.Build());
+                    break;
+            }
+            return;
+        }
+
+        // Remaining Commands (Register, Ranking, NR, Player, Players, Help)
         if (command.CommandName == "register")
         {
             if (command.ChannelId != gConfig.RegisterChannelId) { await command.FollowupAsync($"❌ Usa este comando en <#{gConfig.RegisterChannelId}>"); return; }
@@ -294,15 +342,11 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
             if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
 
-            // SRC profile URL (Slugs usually use underscores for spaces)
             var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
-
             var embed = new EmbedBuilder()
-                .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}")
-                .WithUrl(profileUrl) // Title is now a clickable link
+                .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}").WithUrl(profileUrl)
                 .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\nTotal de runs registradas: **{pRuns.Count}**")
-                .WithColor(Color.Purple)
-                .WithThumbnailUrl(pRuns[0].GameThumbnail);
+                .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
 
             foreach (var run in pRuns.Take(15))
             {
@@ -326,40 +370,26 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 embed.WithDescription(missing.Any() ? string.Join(", ", missing) : "Todos los perfiles están sincronizados.");
                 embed.WithTitle("⚠️ Runners Pendientes de Registro Completo");
             }
-            else if (mode == "all")
-            {
-                embed.WithDescription(string.Join(", ", allInDb));
-            }
-            else
-            {
-                embed.WithDescription($"Actualmente hay **{allInDb.Count}** runners registrados y **{allInDb.Count(n => !synced.Contains(n))}** pendientes.");
-            }
+            else if (mode == "all") embed.WithDescription(string.Join(", ", allInDb));
+            else embed.WithDescription($"Actualmente hay **{allInDb.Count}** runners registrados y **{allInDb.Count(n => !synced.Contains(n))}** pendientes.");
+
             await command.FollowupAsync(embed: embed.Build());
-        }
-        else if (command.CommandName == "track")
-        {
-            if (!isAdmin) { await command.FollowupAsync("🚫 Solo para administradores."); return; }
-            var abbr = command.Data.Options.First().Value.ToString()!;
-            await scope.ServiceProvider.GetRequiredService<IGameRepository>().AddGameAsync(abbr);
-            await command.FollowupAsync($"✅ Juego `{abbr}` agregado a la lista de vigilancia.");
         }
         else if (command.CommandName == "help")
         {
             var embed = new EmbedBuilder().WithTitle("📖 Guía de Speedrun Bot").WithColor(Color.Blue)
                 .AddField("🚀 `/register usuario [nombre]`", "Registra un corredor e importa sus PBs.")
+                .AddField("🎮 `/game [opción]`", "Gestión de juegos, tops y más recientes.")
                 .AddField("🏆 `/ranking [juego] [categoría]`", "Muestra el top nacional.")
                 .AddField("🥇 `/nr`", "Lista todos los Récords Nacionales.")
-                .AddField("👤 `/player [nombre]`", "Muestra el perfil y logros de un corredor.")
-                .AddField("👥 `/players [all/unsynced]`", "Lista de runners registrados o pendientes.")
-                .AddField("⚙️ `/setup`", "Configuración inicial (Solo Admins).")
-                .AddField("🔧 `/update`", "Actualizar configuración (Solo Admins).")
-                .AddField("💻 `/dev`", "Información del desarrollador y apoyo.")
+                .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor.")
+                .AddField("👥 `/players`", "Directorio de runners.")
+                .AddField("⚙️ `/setup`", "Configuración inicial (Admins).")
                 .WithFooter("Pura vida speedrunning 🇨🇷");
             await command.FollowupAsync(embed: embed.Build());
         }
     }
 
-    // Handles Discord's dynamic suggestions based on database content.
     private async Task AutocompleteHandler(SocketAutocompleteInteraction interaction)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -392,7 +422,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         }
     }
 
-    // Updates the persistent census embed with latest player counts.
     private async Task UpdateAllGuildPlayerCounts()
     {
         try
@@ -420,7 +449,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         catch (Exception ex) { Console.WriteLine($"⚠️ Census update error: {ex.Message}"); }
     }
 
-    // Sends detailed notifications for PBs and National Records.
     public async Task SendNewRecordNotificationAsync(RunRecord newRecord, double? prev, bool isNr, int rank)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -431,10 +459,31 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             .WithFooter($"Rank Nacional: #{rank} 🇨🇷 | Global: #{newRecord.WorldRank}").Build();
 
         foreach (var c in db.GuildConfigs.AsEnumerable().Where(c => c.AnnounceChannelId > 0))
+        {
             if (await _client.GetChannelAsync(c.AnnounceChannelId) is IMessageChannel ch)
-                await ch.SendMessageAsync(text: isNr ? "@everyone" : "", embed: embed);
+            {
+                string pingText = "";
+                if (isNr)
+                {
+                    pingText = c.NrPingRoleId > 0 ? $"<@&{c.NrPingRoleId}>" : "@everyone";
+                }
+
+                await ch.SendMessageAsync(text: pingText, embed: embed);
+            }
+        }
 
         await UpdateAllGuildPlayerCounts();
+    }
+
+    // System Alert implementation
+    public async Task SendSystemAlertAsync(string message)
+    {
+        if (_adminChannelId == 0) return;
+
+        if (await _client.GetChannelAsync(_adminChannelId) is IMessageChannel channel)
+        {
+            await channel.SendMessageAsync($"🛠️ **SYSTEM ALERT:** {message}");
+        }
     }
 
     private string FormatTime(double s)

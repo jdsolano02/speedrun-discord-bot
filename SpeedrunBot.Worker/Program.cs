@@ -62,9 +62,28 @@ using (var scope = host.Services.CreateScope())
         }
     }
 
+    var logger = host.Services.GetRequiredService<ILogger<Program>>();
+
     // Initialize and Migrate Database
     var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
     db.Database.EnsureCreated();
+
+    // --- SCHEMA PATCH: INJECT NEW COLUMNS WITHOUT LOSING DATA ---
+    try
+    {
+        // Safely add DateSubmitted column to Runs table (SQLite stores dates as TEXT)
+        db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN DateSubmitted TEXT;");
+        logger.LogInformation("✨ [Schema Update] 'DateSubmitted' column added to Runs.");
+    }
+    catch { /* Column already exists, safe to ignore */ }
+
+    try
+    {
+        // Safely add NrPingRoleId column to GuildConfigs table (ulong stored as INTEGER)
+        db.Database.ExecuteSqlRaw("ALTER TABLE GuildConfigs ADD COLUMN NrPingRoleId INTEGER NOT NULL DEFAULT 0;");
+        logger.LogInformation("✨ [Schema Update] 'NrPingRoleId' column added to GuildConfigs.");
+    }
+    catch { /* Column already exists, safe to ignore */ }
 
     // --- DATABASE CLEANUP: DEDUPLICATION ---
     // Removes duplicate runs keeping the one with the most detailed Category Name 
@@ -85,7 +104,11 @@ using (var scope = host.Services.CreateScope())
         int rowsAffected = db.Database.ExecuteSqlRaw(dedupeSql);
         if (rowsAffected > 0)
         {
-            Console.WriteLine($"✨ [Cleanup] Removed {rowsAffected} duplicate run records (RunLink deduplication).");
+            logger.LogInformation("✨ [Cleanup] Removed {Count} duplicate run records.", rowsAffected);
+        }
+        else
+        {
+            logger.LogInformation("✨ [Cleanup] Database checked. No duplicates found.");
         }
     }
     catch (Exception ex)

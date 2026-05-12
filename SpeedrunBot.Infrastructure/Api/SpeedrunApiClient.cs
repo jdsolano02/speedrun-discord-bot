@@ -122,7 +122,8 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                 TimeInSeconds = item.Run.Times.PrimaryT,
                 RunLink = item.Run.Weblink,
                 GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
-                WorldRank = item.Place
+                WorldRank = item.Place,
+                DateSubmitted = item.Run.Submitted ?? item.Run.Date
             });
         }
 
@@ -161,7 +162,8 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                     TimeInSeconds = runItem.Run.Times.PrimaryT,
                     RunLink = runItem.Run.Weblink,
                     GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
-                    WorldRank = runItem.Place
+                    WorldRank = runItem.Place,
+                    DateSubmitted = runItem.Run.Submitted ?? runItem.Run.Date
                 });
             }
         }
@@ -204,7 +206,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
     public record VariableValueItemDto(string Label);
     public record LeaderboardDto(List<RunItemDto> Runs, PlayersDto Players);
     public record RunItemDto(int Place, RunDto Run);
-    public record RunDto(TimesDto Times, string Weblink, List<PlayerLinkDto> Players, string? Level);
+    public record RunDto(TimesDto Times, string Weblink, List<PlayerLinkDto> Players, string? Level, DateTime? Date, DateTime? Submitted);
     public record TimesDto([property: JsonPropertyName("primary_t")] double PrimaryT);
     public record PlayerLinkDto(string? Id);
     public record PlayersDto([property: JsonPropertyName("data")] List<PlayerDetailDto> Data);

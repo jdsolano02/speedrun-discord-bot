@@ -1,6 +1,6 @@
 namespace SpeedrunBot.Domain.Entities;
 
-//Represents the configuration settings for a specific Discord server(Guild).
+// Represents the configuration settings for a specific Discord server(Guild).
 
 public class GuildConfig
 {
@@ -11,4 +11,5 @@ public class GuildConfig
     public ulong RegisterChannelId { get; set; } // Channel ID where users can use commands to register themselves.
     public ulong AdminRoleId { get; set; } // Role ID allowed to manage bot settings (Admins).
     public ulong DataMakerRoleId { get; set; } // Role ID allowed to manually trigger data updates or modifications.
+    public ulong NrPingRoleId { get; set; } // Role Id for pinging users when a new national record is set.
 }

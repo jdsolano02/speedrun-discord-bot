@@ -22,4 +22,15 @@ public class SqliteGameRepository(SpeedrunContext context) : IGameRepository
             await context.SaveChangesAsync();
         }
     }
+
+    // Removes a game from the tracking database
+    public async Task DeleteGameAsync(string gameId)
+    {
+        var game = await context.TrackedGames.FirstOrDefaultAsync(g => g.GameId == gameId);
+        if (game != null)
+        {
+            context.TrackedGames.Remove(game);
+            await context.SaveChangesAsync();
+        }
+    }
 }

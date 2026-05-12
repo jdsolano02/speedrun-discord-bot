@@ -7,4 +7,5 @@ public interface IDiscordNotifier
 {
     // Sends a formatted notification about a new speedrun achievement.
     Task SendNewRecordNotificationAsync(RunRecord newRecord, double? previousTimeInSeconds, bool isNationalRecord, int nationalRank);
+    Task SendSystemAlertAsync(string message); // Internal system alerts for Admins
 }

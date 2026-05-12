@@ -14,4 +14,5 @@ public record RunRecord
     public string RunLink { get; init; } = string.Empty; // Direct URL to the run on Speedrun.com.
     public string GameThumbnail { get; init; } = string.Empty; // URL to the game's cover art or icon.
     public int WorldRank { get; init; } // Position of the run in the global leaderboard.
+    public DateTime? DateSubmitted { get; init; } // Tracks when the run was submitted
 }
