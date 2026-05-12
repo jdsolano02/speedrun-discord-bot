@@ -24,14 +24,10 @@ secrets.json
 # ==================================
 runs_database.json
 *.db
-*.sqlite
-
-# ==================================
-# 5. Backups y archivos de estado locales
-# ==================================
 *_old.json
-scan_state.txt
-synced_runners.txt
+#*.sqlite
+#scan_state.txt
+#synced_runners.txt
 # ==================================
 # 6. Configuraciones de GitHub
 # ==================================
