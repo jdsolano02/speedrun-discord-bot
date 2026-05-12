@@ -84,7 +84,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     .AddOption(new SlashCommandOptionBuilder().WithName("all").WithDescription("Force a full resync of all registered runners (Admin only).").WithType(ApplicationCommandOptionType.SubCommand));
 
                 // 3. PUBLIC, UTILITY & DEV COMMANDS
-                // FIX: Explicitly set isRequired and isAutocomplete using named parameters to avoid the 'isDefault' crash
                 var rankCommand = new SlashCommandBuilder().WithName("ranking").WithDescription("Show national rankings.")
                     .AddOption("juego", ApplicationCommandOptionType.String, "Game title", isRequired: true, isAutocomplete: true)
                     .AddOption("categoria", ApplicationCommandOptionType.String, "Category or 'ALL_CATEGORIES'", isRequired: true, isAutocomplete: true);
@@ -290,9 +289,13 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
             if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
 
+            // SRC profile URL (Slugs usually use underscores for spaces)
+            var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
+
             var embed = new EmbedBuilder()
                 .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}")
-                .WithDescription($"Total de runs registradas: **{pRuns.Count}**")
+                .WithUrl(profileUrl) // Title is now a clickable link
+                .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\nTotal de runs registradas: **{pRuns.Count}**")
                 .WithColor(Color.Purple)
                 .WithThumbnailUrl(pRuns[0].GameThumbnail);
 
