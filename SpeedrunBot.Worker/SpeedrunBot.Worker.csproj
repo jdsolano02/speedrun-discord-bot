@@ -1,24 +1,37 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>dotnet-SpeedrunBot.Worker-d4eecbf6-a767-431c-9907-35a285dbea9b</UserSecretsId>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<UserSecretsId>dotnet-SpeedrunBot.Worker-d4eecbf6-a767-431c-9907-35a285dbea9b</UserSecretsId>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Discord.Net" Version="3.19.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.7" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Discord.Net" Version="3.19.1" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7">
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+			<PrivateAssets>all</PrivateAssets>
+		</PackageReference>
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+		<PackageReference Include="Microsoft.Extensions.Http" Version="10.0.7" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\SpeedrunBot.Infrastructure\SpeedrunBot.Infrastructure.csproj" />
-    <ProjectReference Include="..\SpeedrunBot.Application\SpeedrunBot.Application.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\SpeedrunBot.Infrastructure\SpeedrunBot.Infrastructure.csproj" />
+		<ProjectReference Include="..\SpeedrunBot.Application\SpeedrunBot.Application.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Update="speedrundb.sqlite">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+		<None Update="scan_state.txt">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+		<None Update="synced_runners.txt">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
+
 </Project>
