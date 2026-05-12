@@ -36,16 +36,27 @@ builder.Services.AddHostedService<Worker>();
 var host = builder.Build();
 
 // ====================================================================
-// 🛡️ SCRIPT DE MIGRACIÓN AL VOLUMEN PERSISTENTE
+// 🛡️ SCRIPT DE MUDANZA CON AUDITORÍA TOTAL (REFORZADO)
 // ====================================================================
 using (var scope = host.Services.CreateScope())
 {
-    var persistentFolder = Path.Combine(Directory.GetCurrentDirectory(), "data");
+    var currentDir = Directory.GetCurrentDirectory();
+    var persistentFolder = Path.Combine(currentDir, "data");
 
-    // Asegurar que la carpeta 'data' exista en el servidor de Railway
+    // 1. Asegurar carpeta de destino
     Directory.CreateDirectory(persistentFolder);
 
-    // Mapeo de archivos: Origen (Raíz) -> Destino (Volumen)
+    Console.WriteLine($"🧪 [DEBUG] Directorio de ejecución: {currentDir}");
+
+    // 2. Listar archivos en raíz para auditoría
+    try
+    {
+        var allFiles = Directory.GetFiles(currentDir);
+        Console.WriteLine($"🧪 [DEBUG] Archivos detectados en raíz: {string.Join(", ", allFiles.Select(Path.GetFileName))}");
+    }
+    catch (Exception ex) { Console.WriteLine($"❌ Error auditando carpeta: {ex.Message}"); }
+
+    // 3. Mapeo de mudanza
     var filesToMove = new Dictionary<string, string>
     {
         { "speedrundb.sqlite", Path.Combine(persistentFolder, "speedrundb.sqlite") },
@@ -55,28 +66,32 @@ using (var scope = host.Services.CreateScope())
 
     foreach (var file in filesToMove)
     {
-        // Si el archivo está en la raíz (llegó por GitHub) 
-        // Y NO existe aún en el volumen estable... lo mudamos
         if (File.Exists(file.Key))
         {
-            Console.WriteLine($"🚚 [MUDANZA] Moviendo {file.Key} al volumen persistente...");
+            Console.WriteLine($"🚚 [MUDANZA] ¡Encontrado! Moviendo {file.Key} -> {file.Value}...");
             try
             {
-                File.Move(file.Key, file.Value);
-                Console.WriteLine($"✅ [MUDANZA] {file.Key} mudado con éxito.");
+                // Usamos Copy con 'true' para sobreescribir la DB vacía que Railway creó
+                File.Copy(file.Key, file.Value, true);
+                File.Delete(file.Key); // Limpiamos la raíz después de copiar
+                Console.WriteLine($"✅ [MUDANZA] {file.Key} mudado y sobreescrito con éxito.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ [MUDANZA] Error moviendo {file.Key}: {ex.Message}");
+                Console.WriteLine($"❌ [MUDANZA] Error crítico moviendo {file.Key}: {ex.Message}");
             }
+        }
+        else
+        {
+            Console.WriteLine($"⚠️ [MUDANZA] El archivo {file.Key} no está en la raíz. Saltando...");
         }
     }
 
+    // 4. Inicializar DB en su ruta final
     var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
     db.Database.EnsureCreated();
 
     // --- MIGRACIÓN ANTIGUA (JSON A SQLITE) ---
-    // Mantenemos esto por si acaso quedara algún rastro de archivos .json
     if (File.Exists("runs_database.json"))
     {
         Console.WriteLine("📦 Migrando runs_database.json a SQLite...");
