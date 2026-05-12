@@ -6,6 +6,7 @@ using SpeedrunBot.Infrastructure.Discord;
 using SpeedrunBot.Infrastructure.Persistence;
 using SpeedrunBot.Worker;
 using System.Text.Json; // Necesario para la migración
+using System.IO; // Necesario para crear el directorio en Linux/Docker
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -45,6 +46,10 @@ var host = builder.Build();
 using (var scope = host.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
+
+    // 🛡️ PARCHE DE LINUX/DOCKER: Obligamos al sistema a crear la carpeta 'data' si no existe
+    Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "data"));
+
     db.Database.EnsureCreated(); // Crea el archivo speedrundb.sqlite si no existe
 
     // Migrar Runs
