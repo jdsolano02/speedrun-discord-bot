@@ -18,7 +18,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly string _botToken;
-    private readonly string _syncedRunnersPath = "synced_runners.txt";
+    private readonly string _syncedRunnersPath = "data/synced_runners.txt";
 
     public DiscordBotService(IServiceProvider serviceProvider, IConfiguration configuration)
     {

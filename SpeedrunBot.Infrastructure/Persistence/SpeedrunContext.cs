@@ -11,8 +11,8 @@ public class SpeedrunContext : DbContext
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        // Esto creará un archivo llamado "speedrundb.sqlite" en la raíz del Worker
-        optionsBuilder.UseSqlite("Data Source=speedrundb.sqlite");
+        // Esto crearï¿½ un archivo llamado "speedrundb.sqlite" en la raï¿½z del Worker
+        optionsBuilder.UseSqlite("Data Source=data/speedrundb.sqlite");
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -21,7 +21,7 @@ public class SpeedrunContext : DbContext
         modelBuilder.Entity<TrackedGame>().HasKey(g => g.GameId);
         modelBuilder.Entity<GuildConfig>().HasKey(gc => gc.GuildId);
 
-        // Índice para búsquedas rápidas de rankings
+        // ï¿½ndice para bï¿½squedas rï¿½pidas de rankings
         modelBuilder.Entity<RunRecord>()
             .HasIndex(r => new { r.GameFullName, r.CategoryName, r.TimeInSeconds });
     }

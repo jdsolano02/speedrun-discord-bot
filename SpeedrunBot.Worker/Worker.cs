@@ -6,7 +6,7 @@ namespace SpeedrunBot.Worker;
 
 public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : BackgroundService
 {
-    private const string StateFile = "scan_state.txt";
+    private const string StateFile = "data/scan_state.txt";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
