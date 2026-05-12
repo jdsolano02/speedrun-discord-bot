@@ -15,7 +15,6 @@ public class RegisterUser(ISpeedrunApi api, IRunRepository runRepository)
             if (user == null) return $"❌ Runner `{username}` not found on Speedrun.com.";
 
             // 2. Check if the runner already exists in our local database.
-            // We use the unique RunnerId to verify existence.
             var allRuns = await runRepository.GetRankingAsync("", "");
             bool alreadyExists = allRuns.Any(r => r.RunnerId == user.Value.Id);
 
@@ -24,9 +23,10 @@ public class RegisterUser(ISpeedrunApi api, IRunRepository runRepository)
             if (!pbs.Any()) return $"⚠️ **{user.Value.Name}** has no verified runs to register.";
 
             // 4. Save or update each run in the local repository.
+            // FIX: Using the correct interface method name 'SavePersonalBestAsync'
             foreach (var run in pbs)
             {
-                await runRepository.AddOrUpdateRunAsync(run);
+                await runRepository.SavePersonalBestAsync(run);
             }
 
             // 5. Return a conditional message based on whether it was a new registration or an update.
