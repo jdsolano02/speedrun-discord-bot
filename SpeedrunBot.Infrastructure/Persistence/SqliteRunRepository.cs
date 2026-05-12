@@ -35,21 +35,30 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // Saves a new Personal Best, ensuring no duplicates for the same runner/game/category.
+    // NEW LOGIC: Saves or Updates a PB using the RunLink as a unique identifier.
+    // This prevents duplicates when category names vary slightly between API endpoints.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
-        // FIX FOR DUPLICATES: Search by RunnerId, GameName and CategoryName
-        var existing = await context.Runs.FirstOrDefaultAsync(r =>
-            r.RunnerId == run.RunnerId &&
-            r.GameFullName == run.GameFullName &&
-            r.CategoryName == run.CategoryName);
+        // 1. Search for an existing record by the unique RunLink
+        var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)
         {
-            // If the runner improved their time, we update the existing record
-            context.Runs.Remove(existing);
+            // 2. If it exists, we decide whether to update it or leave it.
+            // We prioritize the most detailed CategoryName (the longest string).
+            if (run.CategoryName.Length >= existing.CategoryName.Length)
+            {
+                // We remove the old one to ensure the new one (with potentially more data) is saved.
+                context.Runs.Remove(existing);
+            }
+            else
+            {
+                // If the incoming record has a shorter (less detailed) name, we keep the existing one.
+                return;
+            }
         }
 
+        // 3. Add the new/updated record.
         await context.Runs.AddAsync(run);
         await context.SaveChangesAsync();
     }
