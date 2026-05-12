@@ -2,29 +2,32 @@
 
 namespace SpeedrunBot.Application.UseCases;
 
+// Handles the manual registration of a new runner and the import of their history.
 public class RegisterUser(
     ISpeedrunApi speedrunApi,
     IRunRepository repository,
     IGameRepository gameRepository)
 {
+    // Validates a runner, imports their personal bests, and updates the game watchlist.
     public async Task<string> ExecuteAsync(string username)
     {
+        // 1. Verify if the user exists on Speedrun.com
         var user = await speedrunApi.GetUserByNameAsync(username);
-        if (user == null) return $"❌ No se encontró el usuario `{username}` en Speedrun.com.";
+        if (user == null) return $"❌ User `{username}` was not found on Speedrun.com.";
 
+        // 2. Retrieve all full-game personal bests for the runner
         var personalBests = await speedrunApi.GetUserPersonalBestsAsync(user.Value.Id, user.Value.Name);
 
-        if (personalBests.Count == 0) return $"⚠️ El usuario **{user.Value.Name}** no tiene récords de juego completo.";
+        if (personalBests.Count == 0)
+            return $"⚠️ Runner **{user.Value.Name}** does not have any full-game records.";
 
+        // 3. Import each run and ensure the game is added to the scanner's watchlist
         foreach (var run in personalBests)
         {
-            // Guarda el récord
-            await repository.SavePersonalBestAsync(run);
-
-            // Agrega el ID del juego a la lista de vigilancia dinámica
-            await gameRepository.AddGameAsync(run.GameId);
+            await repository.SavePersonalBestAsync(run); // Save historical record
+            await gameRepository.AddGameAsync(run.GameId); // Add game to automatic scanning
         }
 
-        return $"✅ ¡**{user.Value.Name}** registrado! Se importaron {personalBests.Count} récords y se actualizaron los juegos a vigilar automáticamente.";
+        return $"✅ **{user.Value.Name}** registered! {personalBests.Count} runs imported and watchlist updated.";
     }
 }

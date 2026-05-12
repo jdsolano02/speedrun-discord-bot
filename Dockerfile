@@ -1,19 +1,21 @@
-# 1. Etapa de Construcción (Usa el SDK pesado para compilar)
+# STAGE 1: Build & Publish
+# Use the heavy SDK image to compile the source code
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /app
 
-# Copiamos todo el código de tu PC al contenedor
+# Copy the entire solution to the container
 COPY . ./
 
-# Compilamos y publicamos el proyecto Worker y sus dependencias
+# Restore dependencies and publish the Worker project to the /out folder
 RUN dotnet publish SpeedrunBot.Worker/SpeedrunBot.Worker.csproj -c Release -o /out
 
-# 2. Etapa de Producción (Usa el Runtime ligero para ahorrar memoria RAM)
+# STAGE 2: Final Runtime
+# Use the lightweight runtime image for production (saves RAM and disk space)
 FROM mcr.microsoft.com/dotnet/runtime:10.0
 WORKDIR /app
 
-# Traemos solo los archivos compilados de la etapa anterior
+# Copy only the compiled binaries from the build stage
 COPY --from=build /out .
 
-# Le decimos a Docker cómo arrancar el bot
+# Command to launch the background service
 ENTRYPOINT ["dotnet", "SpeedrunBot.Worker.dll"]

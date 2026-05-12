@@ -5,11 +5,13 @@ using SpeedrunBot.Domain.Entities;
 
 namespace SpeedrunBot.Infrastructure.Api;
 
+// Implementation of the Speedrun.com API client using HttpClient.
 public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
 {
     private const string BaseUrl = "https://www.speedrun.com/api/v1";
-    private const int ApiDelayMs = 1000;
+    private const int ApiDelayMs = 1000; // Time to wait between requests to avoid rate limits.
 
+    // Executes a GET request with automatic retry logic for transient errors, but FAILS FAST on Rate Limits.
     private async Task<T?> GetWithRateLimitAsync<T>(string url)
     {
         int maxRetries = 3;
@@ -18,27 +20,23 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
             var response = await httpClient.GetAsync(url);
 
             if (response.IsSuccessStatusCode)
-            {
                 return await response.Content.ReadFromJsonAsync<T>();
+
+            // If it's a 420 or 429, we DO NOT wait internally. We throw an exception IMMEDIATELY
+            // so the Worker catches it and triggers the global "Gearbox" cooldown and concurrency reduction.
+            if ((int)response.StatusCode == 429 || (int)response.StatusCode == 420)
+            {
+                throw new HttpRequestException($"RateLimit_{(int)response.StatusCode}");
             }
 
-            if ((int)response.StatusCode == 429)
-            {
-                Console.WriteLine($"⚠️ Límite de la API alcanzado. Pausando 60 segundos... (Intento {i + 1}/{maxRetries})");
-                await Task.Delay(60000);
-                continue;
-            }
-
-            if ((int)response.StatusCode == 404)
-            {
-                return default;
-            }
+            if ((int)response.StatusCode == 404) return default;
 
             response.EnsureSuccessStatusCode();
         }
         return default;
     }
 
+    // Main scan logic to find latest runs for a specific country across multiple games.
     public async Task<List<RunRecord>> GetLatestCountryRunsAsync(string countryCode, string[] gamesToScan)
     {
         var allRuns = new List<RunRecord>();
@@ -53,6 +51,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                 var categoriesResponse = await GetWithRateLimitAsync<ApiResponse<List<CategoryDto>>>($"{BaseUrl}/games/{abbr}/categories");
                 if (categoriesResponse?.Data == null) continue;
 
+                // Only scan full-game categories
                 foreach (var cat in categoriesResponse.Data.Where(c => c.Type == "per-game"))
                 {
                     var variablesResponse = await GetWithRateLimitAsync<ApiResponse<List<VariableDto>>>($"{BaseUrl}/categories/{cat.Id}/variables");
@@ -76,13 +75,18 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Error procesando el juego '{abbr}': {ex.Message}");
-                throw;
+                // If the exception is our specific RateLimit, let it bubble up directly to the Worker without logging it here.
+                if (ex.Message.Contains("RateLimit_420") || ex.Message.Contains("RateLimit_429"))
+                    throw;
+
+                // Log any other unexpected errors normally.
+                Console.WriteLine($"❌ Error processing game '{abbr}': {ex.Message}");
             }
         }
         return allRuns;
     }
 
+    // Resolves a username to a unique Speedrun.com User ID.
     public async Task<(string Id, string Name)?> GetUserByNameAsync(string username)
     {
         var url = $"{BaseUrl}/users/{username}";
@@ -92,6 +96,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         return (response.Data.Id!, response.Data.Names.International);
     }
 
+    // Retrieves all verified full-game personal bests for a single runner.
     public async Task<List<RunRecord>> GetUserPersonalBestsAsync(string userId, string userName)
     {
         var url = $"{BaseUrl}/users/{userId}/personal-bests?embed=game,category";
@@ -102,12 +107,11 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         var runs = new List<RunRecord>();
         foreach (var item in response.Data)
         {
-            if (!string.IsNullOrEmpty(item.Run.Level)) continue;
+            if (!string.IsNullOrEmpty(item.Run.Level)) continue; // Skip individual levels.
+
             var gameInfo = item.Game.Data;
             var catInfo = item.Category.Data;
-            var runInfo = item.Run;
 
-            // --- AQUI ESTA EL CAMBIO #1 ---
             runs.Add(new RunRecord
             {
                 RunnerId = userId,
@@ -115,8 +119,8 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                 GameId = gameInfo.Id,
                 GameFullName = gameInfo.Names.International,
                 CategoryName = catInfo.Name,
-                TimeInSeconds = runInfo.Times.PrimaryT,
-                RunLink = runInfo.Weblink,
+                TimeInSeconds = item.Run.Times.PrimaryT,
+                RunLink = item.Run.Weblink,
                 GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
                 WorldRank = item.Place
             });
@@ -126,6 +130,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         return runs;
     }
 
+    // Internal helper to fetch leaderboards and filter runners by country code.
     private async Task FetchAndParseRuns(string abbr, string catId, string queryParams, string fullCategoryName, string countryCode, GameDto gameInfo, List<RunRecord> allRuns)
     {
         var url = $"{BaseUrl}/leaderboards/{abbr}/category/{catId}?embed=players";
@@ -146,7 +151,6 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
 
             foreach (var pLink in validCountryPlayers)
             {
-                // --- AQUI ESTA EL CAMBIO #2 ---
                 allRuns.Add(new RunRecord
                 {
                     RunnerId = pLink.Id!,
@@ -164,14 +168,15 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         await Task.Delay(ApiDelayMs);
     }
 
+    // Recursive logic to handle all possible combinations of subcategories (Variables).
     private List<(string QueryString, string Label)> GenerateCombinations(List<VariableDto> vars)
     {
         var results = new List<(string, string)>();
-        GenerateRecursive(vars, 0, "", "", results);
+        GenerateRecursive(results, vars, 0, "", "");
         return results;
     }
 
-    private void GenerateRecursive(List<VariableDto> vars, int index, string currentQuery, string currentLabel, List<(string, string)> results)
+    private void GenerateRecursive(List<(string, string)> results, List<VariableDto> vars, int index, string currentQuery, string currentLabel)
     {
         if (index == vars.Count)
         {
@@ -182,16 +187,12 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         var currentVar = vars[index];
         foreach (var val in currentVar.Values.Values)
         {
-            GenerateRecursive(vars, index + 1, $"{currentQuery}var-{currentVar.Id}={val.Key}&", $"{currentLabel}{val.Value.Label}, ", results);
+            GenerateRecursive(results, vars, index + 1, $"{currentQuery}var-{currentVar.Id}={val.Key}&", $"{currentLabel}{val.Value.Label}, ");
         }
     }
 
-    public Task<List<RunRecord>> GetLatestCountryRunsAsync(string countryCode)
-    {
-        throw new NotImplementedException();
-    }
+    // --- DTOs for Speedrun.com JSON mapping ---
 
-    // --- DTOs ---
     public record ApiResponse<T>(T Data);
     public record GameDto(string Id, GameNames Names, GameAssets Assets);
     public record GameNames(string International);
@@ -207,7 +208,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
     public record TimesDto([property: JsonPropertyName("primary_t")] double PrimaryT);
     public record PlayerLinkDto(string? Id);
     public record PlayersDto([property: JsonPropertyName("data")] List<PlayerDetailDto> Data);
-    public record PlayerDetailDto(string? Id, string Rel, PlayerNamesDto Names, LocDto? Location);
+    public record PlayerDetailDto(string? Id, PlayerNamesDto Names, LocDto? Location);
     public record PlayerNamesDto(string International);
     public record LocDto(CountryDto? Country);
     public record CountryDto(string Code);

@@ -1,34 +1,43 @@
 # ==================================
-# 1. Carpetas de compilación de .NET
+# 1. .NET Build & Runtime Folders
 # ==================================
 bin/
 obj/
 
 # ==================================
-# 2. Archivos de IDE y usuario
+# 2. IDE & User-specific files
 # ==================================
 .vs/
 *.user
 *.suo
-*.vscode/
+.vscode/
+.idea/
 
 # ==================================
-# 3. SECRETOS (¡NUNCA SUBIR ESTO!)
+# 3. SECRETS (Do NOT upload to Git)
 # ==================================
 appsettings.json
 appsettings.Development.json
 secrets.json
 
 # ==================================
-# 4. Bases de datos locales
+# 4. Local Data & Persistence
 # ==================================
-runs_database.json
+# We ignore these because they live in the Railway persistent volume
 *.db
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+scan_state.txt
+synced_runners.txt
+
+# Legacy JSON data (Migrated to SQL)
+runs_database.json
+tracked_games.json
 *_old.json
-#*.sqlite
-#scan_state.txt
-#synced_runners.txt
+
 # ==================================
-# 6. Configuraciones de GitHub
+# 5. OS & Misc
 # ==================================
+.DS_Store
 .github/

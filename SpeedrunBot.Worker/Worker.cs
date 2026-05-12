@@ -4,18 +4,21 @@ using System.Diagnostics;
 
 namespace SpeedrunBot.Worker;
 
+// Main background service that handles the periodic scanning of speedruns.
 public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : BackgroundService
 {
-    private const string StateFile = "data/scan_state.txt";
+    private const string StateFile = "data/scan_state.txt"; // File to persist scanning progress.
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("🚀 SERVICIO DE SPEEDRUN BOT INICIADO (Modo Adaptativo Inteligente)");
+        logger.LogInformation("🚀 SPEEDRUN BOT SERVICE STARTED (Intelligent Adaptive Mode)");
 
         using PeriodicTimer scanTimer = new(TimeSpan.FromMinutes(10));
 
+        // Immediate first run on startup
         await RunScanningCycleAsync(stoppingToken);
 
+        // Periodic loop
         while (!stoppingToken.IsCancellationRequested && await scanTimer.WaitForNextTickAsync(stoppingToken))
         {
             await RunScanningCycleAsync(stoppingToken);
@@ -24,10 +27,10 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
     private async Task RunScanningCycleAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("🔍 Iniciando ciclo de escaneo masivo: {time}", DateTimeOffset.Now);
+        logger.LogInformation("🔍 Starting massive scan cycle: {time}", DateTimeOffset.Now);
 
-        Stopwatch cronometro = new Stopwatch();
-        cronometro.Start();
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
 
         try
         {
@@ -36,9 +39,9 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
             var checker = scope.ServiceProvider.GetRequiredService<CheckForNewRecords>();
 
             var gamesToScan = await gameRepo.GetTrackedGamesAsync();
-
             if (gamesToScan.Count == 0) return;
 
+            // Restore last saved index to resume progress if the bot restarted
             int startIndex = 0;
             if (File.Exists(StateFile) && int.TryParse(await File.ReadAllTextAsync(StateFile), out int savedIndex))
             {
@@ -47,15 +50,15 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
             if (startIndex > 0)
             {
-                logger.LogInformation("💾 Recuperando Save State... Retomando escaneo desde el ID #{index}", startIndex);
+                logger.LogInformation("💾 State recovered. Resuming scan from ID #{index}", startIndex);
             }
 
             int chunkSize = 50;
 
-            // --- VARIABLES DE LA CAJA DE CAMBIOS ADAPTATIVA ---
+            // --- ADAPTIVE GEARBOX VARIABLES (Throttling logic) ---
             int maxConcurrentTasks = 5;
             int currentDelayMs = 2000;
-            int successStreak = 0; // Contador de racha para volver a acelerar
+            int successStreak = 0;
             object syncLock = new object();
             DateTime lastThrottleTime = DateTime.MinValue;
 
@@ -66,8 +69,8 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 var currentChunk = gamesToScan.Skip(i).Take(chunkSize).ToArray();
                 int currentEnd = i + currentChunk.Length;
 
-                logger.LogInformation("📡 Progreso: [{current}/{total}] IDs escaneados. Tiempo: {time}",
-                    currentEnd, gamesToScan.Count, cronometro.Elapsed.ToString(@"hh\:mm\:ss"));
+                logger.LogInformation("📡 Progress: [{current}/{total}] IDs scanned. Elapsed: {time}",
+                    currentEnd, gamesToScan.Count, stopwatch.Elapsed.ToString(@"hh\:mm\:ss"));
 
                 using var semaphore = new SemaphoreSlim(maxConcurrentTasks);
 
@@ -77,55 +80,54 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                     try
                     {
-                        bool procesadoConExito = false;
-                        int intentos = 0;
-                        int maxIntentos = 3;
+                        bool isProcessed = false;
+                        int attempts = 0;
+                        int maxAttempts = 3;
 
-                        while (!procesadoConExito && intentos < maxIntentos)
+                        while (!isProcessed && attempts < maxAttempts)
                         {
                             if (stoppingToken.IsCancellationRequested) break;
 
                             try
                             {
-                                logger.LogInformation("➡️ Analizando juego ID: {id} (Intento {i}/{max})...", gameId, intentos + 1, maxIntentos);
+                                logger.LogInformation("➡️ Analyzing game: {id} (Attempt {i}/{max})...", gameId, attempts + 1, maxAttempts);
                                 await checker.ExecuteAsync("cr", new[] { gameId });
 
                                 await Task.Delay(currentDelayMs, stoppingToken);
 
-                                // ✅ ÉXITO: Incrementamos racha y evaluamos subir de marcha
+                                // SUCCESS: Increase streak and evaluate if we can speed up
                                 lock (syncLock)
                                 {
                                     successStreak++;
                                     if (successStreak >= 20)
                                     {
-                                        bool huboCambio = false;
-                                        // Intentamos volver a los valores originales gradualmente
-                                        if (maxConcurrentTasks < 5) { maxConcurrentTasks++; huboCambio = true; }
-                                        if (currentDelayMs > 2000) { currentDelayMs -= 500; huboCambio = true; }
+                                        bool changed = false;
+                                        if (maxConcurrentTasks < 5) { maxConcurrentTasks++; changed = true; }
+                                        if (currentDelayMs > 2000) { currentDelayMs -= 500; changed = true; }
 
-                                        if (huboCambio)
+                                        if (changed)
                                         {
-                                            logger.LogInformation("🚀 OPTIMIZACIÓN: Racha de éxito detectada. Subiendo a {hilos} hilos y {pausa}ms de pausa.", maxConcurrentTasks, currentDelayMs);
+                                            logger.LogInformation("🚀 OPTIMIZATION: Success streak detected. Increasing to {threads} threads and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
                                         }
-                                        successStreak = 0; // Reiniciamos contador tras el ajuste
+                                        successStreak = 0;
                                     }
                                 }
-
-                                procesadoConExito = true;
+                                isProcessed = true;
                             }
                             catch (TaskCanceledException)
                             {
-                                logger.LogWarning("⚠️ Timeout en juego ID: {id}. Saltando...", gameId);
+                                logger.LogWarning("⚠️ Timeout on game {id}. Skipping...", gameId);
                                 break;
                             }
                             catch (Exception ex)
                             {
+                                // API Rate Limit detection (429 or unofficial 420)
                                 if (ex.Message.Contains("420") || ex.Message.Contains("429"))
                                 {
-                                    intentos++;
+                                    attempts++;
                                     lock (syncLock)
                                     {
-                                        successStreak = 0; // Se rompe la racha por error
+                                        successStreak = 0; // Reset streak on error
                                         if ((DateTime.Now - lastThrottleTime).TotalSeconds > 60)
                                         {
                                             lastThrottleTime = DateTime.Now;
@@ -133,16 +135,16 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                                             if (maxConcurrentTasks < 1) maxConcurrentTasks = 1;
                                             currentDelayMs += 1000;
 
-                                            logger.LogWarning("⚙️ AUTO-AJUSTE: Reduciendo a {hilos} hilo(s) y {pausa}ms de pausa.", maxConcurrentTasks, currentDelayMs);
+                                            logger.LogWarning("⚙️ AUTO-ADJUST: Throttling down to {threads} thread(s) and {delay}ms delay.", maxConcurrentTasks, currentDelayMs);
                                         }
                                     }
 
-                                    logger.LogWarning("⏳ Límite de API alcanzado en juego {id}. Enfriando 60s antes del reintento...", gameId);
+                                    logger.LogWarning("⏳ Rate limit hit on {id}. Cooling down 60s...", gameId);
                                     await Task.Delay(60000, stoppingToken);
                                 }
                                 else
                                 {
-                                    logger.LogWarning("⚠️ Error HTTP inesperado en juego {id}: {msg}", gameId, ex.Message);
+                                    logger.LogWarning("⚠️ Unexpected error on game {id}: {msg}", gameId, ex.Message);
                                     break;
                                 }
                             }
@@ -156,6 +158,7 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                 await Task.WhenAll(tasks);
 
+                // Save progress after each chunk
                 int nextIndex = i + chunkSize;
                 await File.WriteAllTextAsync(StateFile, nextIndex.ToString(), stoppingToken);
 
@@ -167,15 +170,15 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
             if (!stoppingToken.IsCancellationRequested)
             {
-                cronometro.Stop();
-                await File.WriteAllTextAsync(StateFile, "0", stoppingToken);
-                logger.LogInformation("✅ Ciclo completado al 100%. Tiempo total: {time}", cronometro.Elapsed.ToString(@"hh\:mm\:ss"));
+                stopwatch.Stop();
+                await File.WriteAllTextAsync(StateFile, "0", stoppingToken); // Reset state on completion
+                logger.LogInformation("✅ Cycle completed 100%. Total time: {time}", stopwatch.Elapsed.ToString(@"hh\:mm\:ss"));
             }
         }
         catch (Exception ex)
         {
-            cronometro.Stop();
-            logger.LogError(ex, "❌ Error crítico.");
+            stopwatch.Stop();
+            logger.LogError(ex, "❌ Critical error during scan cycle.");
         }
     }
 }
