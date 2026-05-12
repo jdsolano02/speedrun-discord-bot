@@ -57,7 +57,7 @@ using (var scope = host.Services.CreateScope())
     {
         // Si el archivo está en la raíz (llegó por GitHub) 
         // Y NO existe aún en el volumen estable... lo mudamos
-        if (File.Exists(file.Key) && !File.Exists(file.Value))
+        if (File.Exists(file.Key))
         {
             Console.WriteLine($"🚚 [MUDANZA] Moviendo {file.Key} al volumen persistente...");
             try
