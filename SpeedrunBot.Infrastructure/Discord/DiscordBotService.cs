@@ -79,7 +79,12 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
 
                 // 2. REGISTER: Runner management subcommands.
                 var registerCommand = new SlashCommandBuilder().WithName("register").WithDescription("Manage the speedrunner database.")
-                    .AddOption(new SlashCommandOptionBuilder().WithName("usuario").WithDescription("Register a new runner by their Speedrun.com name.").WithType(ApplicationCommandOptionType.SubCommand).AddOption("nombre", ApplicationCommandOptionType.String, "Speedrun.com username.", isRequired: true))
+                    .AddOption(new SlashCommandOptionBuilder()
+                        .WithName("usuario")
+                        .WithDescription("Register a new runner by their Speedrun.com name.")
+                        .WithType(ApplicationCommandOptionType.SubCommand)
+                        .AddOption("nombre", ApplicationCommandOptionType.String, "Speedrun.com username.", isRequired: true, isAutocomplete: true) // <--- ESTO FALTABA
+                    )
                     .AddOption(new SlashCommandOptionBuilder().WithName("pending").WithDescription("Sync discovered runners not yet in the system (Data Helpers).").WithType(ApplicationCommandOptionType.SubCommand))
                     .AddOption(new SlashCommandOptionBuilder().WithName("all").WithDescription("Force a full resync of all registered runners (Admin only).").WithType(ApplicationCommandOptionType.SubCommand));
 
