@@ -129,364 +129,394 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
     private async Task SlashCommandHandler(SocketSlashCommand command)
     {
         await command.DeferAsync();
-        using var scope = _serviceProvider.CreateScope();
-        var repo = scope.ServiceProvider.GetRequiredService<IRunRepository>();
-        var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
-        ulong guildId = command.GuildId ?? 0;
 
-        if (guildId == 0) { await command.FollowupAsync("❌ This command is for servers only."); return; }
-
-        var gConfig = await db.GuildConfigs.FindAsync(guildId);
-        var gUser = command.User as SocketGuildUser;
-
-        bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
-        bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
-
-        if (command.CommandName == "setup" || command.CommandName == "update")
+        try
         {
-            if (!isAdmin) { await command.FollowupAsync("🚫 Permisos insuficientes."); return; }
-            var config = gConfig ?? new GuildConfig { GuildId = guildId };
-            if (db.Entry(config).State == Microsoft.EntityFrameworkCore.EntityState.Detached) db.GuildConfigs.Add(config);
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IRunRepository>();
+            var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
+            ulong guildId = command.GuildId ?? 0;
 
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "new_records_announcement")?.Value is IChannel chA) config.AnnounceChannelId = chA.Id;
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "rankings")?.Value is IChannel chR) config.RankingsChannelId = chR.Id;
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "registro")?.Value is IChannel chReg) config.RegisterChannelId = chReg.Id;
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "player_count")?.Value is IChannel chC) config.PlayersChannelId = chC.Id;
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_data_helpers")?.Value is IRole rDH) config.DataMakerRoleId = rDH.Id;
+            if (guildId == 0) { await command.FollowupAsync("❌ This command is for servers only."); return; }
 
-            if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_notificaciones_nr")?.Value is IRole rNR) config.NrPingRoleId = rNR.Id;
+            var gConfig = await db.GuildConfigs.FindAsync(guildId);
+            var gUser = command.User as SocketGuildUser;
 
-            await db.SaveChangesAsync();
+            bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
+            bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
 
-            if (command.CommandName == "setup")
+            if (command.CommandName == "setup" || command.CommandName == "update")
             {
-                var welcomeMsg = "✅ **Servidor configurado correctamente.**\n\n" +
-                                 "*Hola! Mi nombre es realxones o jdsolano02, gracias por incluir mi bot en tu Discord.*\n\n" +
-                                 "*Si quieres apoyar a mantener corriendo el bot de manera gratuita para toda la comunidad, considera dejar tu propina aquí:* [https://streamelements.com/realxones/tip](https://streamelements.com/realxones/tip) \n" +
-                                 "Puedes revisar la documentación del bot aquí: [https://github.com/jdsolano02/speedrun-discord-bot](https://github.com/jdsolano02/speedrun-discord-bot) \n" +
-                                 "También revisa mis redes sociales: [https://linktr.ee/Xones](https://linktr.ee/Xones) \n" +
-                                 "**¡Muchas gracias por tu apoyo!**";
-                await command.FollowupAsync(welcomeMsg);
-            }
-            else
-            {
-                await command.FollowupAsync("✅ **Configuración actualizada.**");
-            }
+                if (!isAdmin) { await command.FollowupAsync("🚫 Permisos insuficientes."); return; }
+                var config = gConfig ?? new GuildConfig { GuildId = guildId };
+                if (db.Entry(config).State == Microsoft.EntityFrameworkCore.EntityState.Detached) db.GuildConfigs.Add(config);
 
-            await UpdateAllGuildPlayerCounts();
-            return;
-        }
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "new_records_announcement")?.Value is IChannel chA) config.AnnounceChannelId = chA.Id;
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "rankings")?.Value is IChannel chR) config.RankingsChannelId = chR.Id;
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "registro")?.Value is IChannel chReg) config.RegisterChannelId = chReg.Id;
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "player_count")?.Value is IChannel chC) config.PlayersChannelId = chC.Id;
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_data_helpers")?.Value is IRole rDH) config.DataMakerRoleId = rDH.Id;
 
-        if (command.CommandName == "dev")
-        {
-            await command.FollowupAsync("*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n*Apoya el bot:* [https://streamelements.com/realxones/tip](https://streamelements.com/realxones/tip) \nGithub: [https://github.com/jdsolano02/speedrun-discord-bot](https://github.com/jdsolano02/speedrun-discord-bot)");
-            return;
-        }
+                if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_notificaciones_nr")?.Value is IRole rNR) config.NrPingRoleId = rNR.Id;
 
-        if (gConfig == null) { await command.FollowupAsync("⚠️ El bot no está configurado. Un admin debe usar `/setup`."); return; }
+                await db.SaveChangesAsync();
 
-        if (command.CommandName == "game")
-        {
-            var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
-            var subCommand = command.Data.Options.First();
+                if (command.CommandName == "setup")
+                {
+                    var welcomeMsg = "✅ **Servidor configurado correctamente.**\n\n" +
+                                     "*Hola! Mi nombre es realxones o jdsolano02, gracias por incluir mi bot en tu Discord.*\n\n" +
+                                     "*Si quieres apoyar a mantener corriendo el bot de manera gratuita para toda la comunidad, considera dejar tu propina aquí:* https://streamelements.com/realxones/tip \n" +
+                                     "Puedes revisar la documentación del bot aquí: https://github.com/jdsolano02/speedrun-discord-bot \n" +
+                                     "También revisa mis redes sociales: https://linktr.ee/Xones \n" +
+                                     "**¡Muchas gracias por tu apoyo!**";
+                    await command.FollowupAsync(welcomeMsg);
+                }
+                else
+                {
+                    await command.FollowupAsync("✅ **Configuración actualizada.**");
+                }
 
-            switch (subCommand.Name)
-            {
-                case "add":
-                    if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
-                    var idAdd = subCommand.Options.First().Value.ToString()!;
-                    await gameRepo.AddGameAsync(idAdd);
-                    await command.FollowupAsync($"✅ Juego `{idAdd}` añadido a la cola de escaneo.");
-                    break;
-
-                case "delete":
-                    if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
-                    var idDel = subCommand.Options.First().Value.ToString()!;
-                    await gameRepo.DeleteGameAsync(idDel);
-                    await command.FollowupAsync($"🗑️ Juego `{idDel}` eliminado de la base de datos.");
-                    break;
-
-                case "list":
-                    var trackedIds = await gameRepo.GetTrackedGamesAsync();
-                    var allRunsForNames = await repo.GetRankingAsync("", "");
-
-                    var gamesList = trackedIds.Select(id => {
-                        var run = allRunsForNames.FirstOrDefault(r => r.GameId == id);
-                        return run != null ? $"{run.GameFullName} ({id})" : id;
-                    }).OrderBy(g => g).ToList();
-
-                    var content = string.Join("\r\n", gamesList);
-                    using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(content)))
-                    {
-                        await command.FollowupWithFileAsync(stream, "juegos_cr.txt", $"📄 Lista de los **{gamesList.Count}** juegos monitoreados.");
-                    }
-                    break;
-
-                case "recent":
-                    var recentGames = await repo.GetRecentlyActiveGamesAsync(15);
-                    var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
-                        .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
-                    await command.FollowupAsync(embed: embedR.Build());
-                    break;
-
-                case "most_played":
-                    var allForTop = await repo.GetRankingAsync("", "");
-                    var topGames = allForTop.GroupBy(r => r.GameFullName)
-                        .Select(g => new { Name = g.Key, Players = g.Select(r => r.RunnerId).Distinct().Count() })
-                        .OrderByDescending(x => x.Players)
-                        .Take(20);
-
-                    var embedTop = new EmbedBuilder().WithTitle("🔥 Juegos Más Jugados").WithColor(Color.Orange)
-                        .WithDescription(string.Join("\n", topGames.Select((g, i) => $"{i + 1}. **{g.Name}** ({g.Players} runners)")));
-                    await command.FollowupAsync(embed: embedTop.Build());
-                    break;
-            }
-            return;
-        }
-
-        if (command.CommandName == "register")
-        {
-            if (command.ChannelId != gConfig.RegisterChannelId) { await command.FollowupAsync($"❌ Usa este comando en <#{gConfig.RegisterChannelId}>"); return; }
-            var sub = command.Data.Options.First();
-
-            if (sub.Name == "usuario")
-            {
-                var target = sub.Options.First().Value.ToString()!;
-                var res = await scope.ServiceProvider.GetRequiredService<RegisterUser>().ExecuteAsync(target);
-                await File.AppendAllLinesAsync(_syncedRunnersPath, new[] { target });
-                await command.FollowupAsync(res);
                 await UpdateAllGuildPlayerCounts();
+                return;
             }
-            else if (sub.Name == "pending")
+
+            if (command.CommandName == "dev")
             {
-                if (!isDataHelper) { await command.FollowupAsync("🚫 Rol de **Data Helper** o **Admin** requerido."); return; }
-                var allRunners = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().ToList();
-                var synced = File.Exists(_syncedRunnersPath) ? new HashSet<string>(await File.ReadAllLinesAsync(_syncedRunnersPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
-                var missing = allRunners.Where(n => !synced.Contains(n)).ToList();
+                await command.FollowupAsync("*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n*Apoya el bot:* https://streamelements.com/realxones/tip \nGithub: https://github.com/jdsolano02/speedrun-discord-bot");
+                return;
+            }
 
-                if (!missing.Any()) { await command.FollowupAsync("✅ No hay runners pendientes."); return; }
-                await command.FollowupAsync($"🔍 Sincronización de **{missing.Count}** runners iniciada en segundo plano...");
+            if (gConfig == null) { await command.FollowupAsync("⚠️ El bot no está configurado. Un admin debe usar `/setup`."); return; }
 
-                _ = Task.Run(async () => {
-                    using var bg = _serviceProvider.CreateScope();
-                    var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
-                    foreach (var m in missing) { try { await reg.ExecuteAsync(m); await File.AppendAllLinesAsync(_syncedRunnersPath, new[] { m }); await Task.Delay(2000); } catch { } }
-                    if (await _client.GetChannelAsync(gConfig.RegisterChannelId) is IMessageChannel ch)
-                        await ch.SendMessageAsync($"🔔 **Sincronización finalizada:** {missing.Count} runners importados.");
+            if (command.CommandName == "game")
+            {
+                var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
+                var subCommand = command.Data.Options.First();
+
+                switch (subCommand.Name)
+                {
+                    case "add":
+                        if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
+                        var idAdd = subCommand.Options.First().Value.ToString()!;
+
+                        // NEW: Pre-check to verify if the game is already in the database
+                        var currentlyTracked = await gameRepo.GetTrackedGamesAsync();
+                        if (currentlyTracked.Any(id => id.Equals(idAdd, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            await command.FollowupAsync($"⚠️ El juego `{idAdd}` ya se encuentra en la lista de escaneo.");
+                            break;
+                        }
+
+                        await gameRepo.AddGameAsync(idAdd);
+                        await command.FollowupAsync($"✅ Juego `{idAdd}` añadido a la cola de escaneo.");
+                        break;
+
+                    case "delete":
+                        if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
+                        var idDel = subCommand.Options.First().Value.ToString()!;
+                        await gameRepo.DeleteGameAsync(idDel);
+                        await command.FollowupAsync($"🗑️ Juego `{idDel}` eliminado de la base de datos.");
+                        break;
+
+                    case "list":
+                        var trackedIds = await gameRepo.GetTrackedGamesAsync();
+                        var allRunsForNames = await repo.GetRankingAsync("", "");
+
+                        var gamesList = trackedIds.Select(id => {
+                            var run = allRunsForNames.FirstOrDefault(r => r.GameId == id);
+                            return run != null ? $"{run.GameFullName} ({id})" : id;
+                        }).OrderBy(g => g).ToList();
+
+                        var content = string.Join("\r\n", gamesList);
+                        using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(content)))
+                        {
+                            await command.FollowupWithFileAsync(stream, "juegos_cr.txt", $"📄 Lista de los **{gamesList.Count}** juegos monitoreados.");
+                        }
+                        break;
+
+                    case "recent":
+                        var recentGames = await repo.GetRecentlyActiveGamesAsync(15);
+                        var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
+                            .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
+                        await command.FollowupAsync(embed: embedR.Build());
+                        break;
+
+                    case "most_played":
+                        var allForTop = await repo.GetRankingAsync("", "");
+                        var topGames = allForTop.GroupBy(r => r.GameFullName)
+                            .Select(g => new { Name = g.Key, Players = g.Select(r => r.RunnerId).Distinct().Count() })
+                            .OrderByDescending(x => x.Players)
+                            .Take(20);
+
+                        var embedTop = new EmbedBuilder().WithTitle("🔥 Juegos Más Jugados").WithColor(Color.Orange)
+                            .WithDescription(string.Join("\n", topGames.Select((g, i) => $"{i + 1}. **{g.Name}** ({g.Players} runners)")));
+                        await command.FollowupAsync(embed: embedTop.Build());
+                        break;
+                }
+                return;
+            }
+
+            if (command.CommandName == "register")
+            {
+                if (command.ChannelId != gConfig.RegisterChannelId) { await command.FollowupAsync($"❌ Usa este comando en <#{gConfig.RegisterChannelId}>"); return; }
+                var sub = command.Data.Options.First();
+
+                if (sub.Name == "usuario")
+                {
+                    var target = sub.Options.First().Value.ToString()!;
+                    var res = await scope.ServiceProvider.GetRequiredService<RegisterUser>().ExecuteAsync(target);
+                    await File.AppendAllLinesAsync(_syncedRunnersPath, new[] { target });
+                    await command.FollowupAsync(res);
                     await UpdateAllGuildPlayerCounts();
-                });
-            }
-            else if (sub.Name == "all")
-            {
-                if (!isAdmin) { await command.FollowupAsync("🚫 Solo para Administradores."); return; }
-                var allRunners = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().ToList();
-                await command.FollowupAsync($"🚀 Iniciando actualización masiva de **{allRunners.Count}** perfiles...");
-                _ = Task.Run(async () => {
-                    using var bg = _serviceProvider.CreateScope();
-                    var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
-                    foreach (var r in allRunners) { try { await reg.ExecuteAsync(r); await Task.Delay(2000); } catch { } }
-                    if (await _client.GetChannelAsync(gConfig.RegisterChannelId) is IMessageChannel ch)
-                        await ch.SendMessageAsync($"🔔 **Actualización masiva completada.** Datos de PBs actualizados.");
-                });
-            }
-        }
-        else if (command.CommandName == "ranking")
-        {
-            if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}> para rankings."); return; }
-            var juego = command.Data.Options.First(x => x.Name == "juego").Value?.ToString() ?? "";
-            var cat = command.Data.Options.First(x => x.Name == "categoria").Value?.ToString() ?? "";
-
-            bool isAllCategories = string.IsNullOrWhiteSpace(cat) || cat.Equals("ALL_CATEGORIES", StringComparison.OrdinalIgnoreCase);
-            var runs = await repo.GetRankingAsync(juego, isAllCategories ? "" : cat);
-
-            if (!runs.Any()) { await command.FollowupAsync("Sin registros."); return; }
-
-            var embed = new EmbedBuilder().WithTitle(isAllCategories ? $"📚 {juego} (Resumen General)" : $"🏆 Ranking: {juego}").WithColor(Color.Blue).WithThumbnailUrl(runs[0].GameThumbnail);
-
-            if (isAllCategories)
-            {
-                foreach (var group in runs.GroupBy(r => r.CategoryName))
+                }
+                else if (sub.Name == "pending")
                 {
-                    var categoryRuns = group.ToList();
-                    var sb = new StringBuilder();
-                    int pos = 1;
+                    if (!isDataHelper) { await command.FollowupAsync("🚫 Rol de **Data Helper** o **Admin** requerido."); return; }
+                    var allRunners = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().ToList();
+                    var synced = File.Exists(_syncedRunnersPath) ? new HashSet<string>(await File.ReadAllLinesAsync(_syncedRunnersPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+                    var missing = allRunners.Where(n => !synced.Contains(n)).ToList();
 
-                    for (int i = 0; i < categoryRuns.Count && i < 10; i++)
+                    if (!missing.Any()) { await command.FollowupAsync("✅ No hay runners pendientes."); return; }
+                    await command.FollowupAsync($"🔍 Sincronización de **{missing.Count}** runners iniciada en segundo plano...");
+
+                    _ = Task.Run(async () => {
+                        using var bg = _serviceProvider.CreateScope();
+                        var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
+                        foreach (var m in missing) { try { await reg.ExecuteAsync(m); await File.AppendAllLinesAsync(_syncedRunnersPath, new[] { m }); await Task.Delay(2000); } catch { } }
+                        if (await _client.GetChannelAsync(gConfig.RegisterChannelId) is IMessageChannel ch)
+                            await ch.SendMessageAsync($"🔔 **Sincronización finalizada:** {missing.Count} runners importados.");
+                        await UpdateAllGuildPlayerCounts();
+                    });
+                }
+                else if (sub.Name == "all")
+                {
+                    if (!isAdmin) { await command.FollowupAsync("🚫 Solo para Administradores."); return; }
+                    var allRunners = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().ToList();
+                    await command.FollowupAsync($"🚀 Iniciando actualización masiva de **{allRunners.Count}** perfiles...");
+                    _ = Task.Run(async () => {
+                        using var bg = _serviceProvider.CreateScope();
+                        var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
+                        foreach (var r in allRunners) { try { await reg.ExecuteAsync(r); await Task.Delay(2000); } catch { } }
+                        if (await _client.GetChannelAsync(gConfig.RegisterChannelId) is IMessageChannel ch)
+                            await ch.SendMessageAsync($"🔔 **Actualización masiva completada.** Datos de PBs actualizados.");
+                    });
+                }
+            }
+            else if (command.CommandName == "ranking")
+            {
+                if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}> para rankings."); return; }
+                var juego = command.Data.Options.First(x => x.Name == "juego").Value?.ToString() ?? "";
+                var cat = command.Data.Options.First(x => x.Name == "categoria").Value?.ToString() ?? "";
+
+                bool isAllCategories = string.IsNullOrWhiteSpace(cat) || cat.Equals("ALL_CATEGORIES", StringComparison.OrdinalIgnoreCase);
+                var runs = await repo.GetRankingAsync(juego, isAllCategories ? "" : cat);
+
+                if (!runs.Any()) { await command.FollowupAsync("Sin registros."); return; }
+
+                var embed = new EmbedBuilder().WithTitle(isAllCategories ? $"📚 {juego} (Resumen General)" : $"🏆 Ranking: {juego}").WithColor(Color.Blue).WithThumbnailUrl(runs[0].GameThumbnail);
+
+                if (isAllCategories)
+                {
+                    var groupedCategories = runs.GroupBy(r => r.CategoryName).ToList();
+
+                    foreach (var group in groupedCategories.Take(25))
                     {
-                        if (i > 0 && categoryRuns[i].TimeInSeconds > categoryRuns[i - 1].TimeInSeconds) pos = i + 1;
-                        string medal = pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" };
-                        sb.AppendLine($"{medal} **{categoryRuns[i].RunnerName}**: {FormatTime(categoryRuns[i].TimeInSeconds)}");
+                        var categoryRuns = group.ToList();
+                        var sb = new StringBuilder();
+                        int pos = 1;
+
+                        for (int i = 0; i < categoryRuns.Count && i < 10; i++)
+                        {
+                            if (i > 0 && categoryRuns[i].TimeInSeconds > categoryRuns[i - 1].TimeInSeconds) pos = i + 1;
+                            string medal = pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" };
+                            sb.AppendLine($"{medal} **{categoryRuns[i].RunnerName}**: {FormatTime(categoryRuns[i].TimeInSeconds)}");
+                        }
+
+                        string fieldContent = sb.ToString();
+                        if (string.IsNullOrWhiteSpace(fieldContent)) fieldContent = "Sin registros.";
+
+                        embed.AddField(group.Key.Length > 256 ? group.Key.Substring(0, 253) + "..." : group.Key, fieldContent);
                     }
-                    embed.AddField(group.Key, sb.ToString());
+
+                    if (groupedCategories.Count > 25)
+                    {
+                        embed.WithFooter($"Mostrando 25 de {groupedCategories.Count} categorías por límites visuales de Discord.");
+                    }
                 }
-            }
-            else
-            {
-                int pos = 1;
-                for (int i = 0; i < runs.Count && i < 15; i++)
+                else
                 {
-                    if (i > 0 && runs[i].TimeInSeconds > runs[i - 1].TimeInSeconds) pos = i + 1;
-                    embed.AddField($"{pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" }} {runs[i].RunnerName}", $"**Tiempo:** {FormatTime(runs[i].TimeInSeconds)} | 🌍 #{runs[i].WorldRank}");
+                    int pos = 1;
+                    for (int i = 0; i < runs.Count && i < 15; i++)
+                    {
+                        if (i > 0 && runs[i].TimeInSeconds > runs[i - 1].TimeInSeconds) pos = i + 1;
+                        embed.AddField($"{pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" }} {runs[i].RunnerName}", $"**Tiempo:** {FormatTime(runs[i].TimeInSeconds)} | 🌍 #{runs[i].WorldRank}");
+                    }
                 }
-            }
-            await command.FollowupAsync(embed: embed.Build());
-        }
-        else if (command.CommandName == "nr")
-        {
-            var allRuns = await repo.GetRankingAsync("", "");
-            var nrs = allRuns.GroupBy(r => new { r.GameFullName, r.CategoryName }).Select(g => g.OrderBy(r => r.TimeInSeconds).First()).OrderBy(r => r.GameFullName).ToList();
-            var sb = new StringBuilder().AppendLine("🏆 RÉCORDS NACIONALES OFICIALES 🏆\n");
-            foreach (var nr in nrs) sb.AppendLine($"- {nr.GameFullName} ({nr.CategoryName}): {nr.RunnerName} [{FormatTime(nr.TimeInSeconds)}]");
-
-            await command.FollowupAsync($"```text\n{sb}```");
-        }
-        else if (command.CommandName == "top")
-        {
-            var subCommand = command.Data.Options.First();
-            var allRuns = await repo.GetRankingAsync("", "");
-
-            if (subCommand.Name == "runs")
-            {
-                var validRuns = allRuns
-                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
-                    .Select(r => new {
-                        Run = r,
-                        Weight = (double)r.WorldRank / r.TotalGlobalRunners,
-                        Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
-                    })
-                    .OrderBy(x => x.Weight)
-                    .Take(20)
-                    .ToList();
-
-                if (!validRuns.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
-
-                var embed = new EmbedBuilder()
-                    .WithTitle("🌟 Top 20 Mejores Runs de Costa Rica")
-                    .WithColor(Color.Magenta)
-                    .WithDescription("Calculado mediante percentil global (`Rank Global / Total Runners`).\n\n");
-
-                var sb = new StringBuilder();
-                int rankIndex = 1;
-                foreach (var item in validRuns)
-                {
-                    var natRank = allRuns.Where(r => r.GameFullName == item.Run.GameFullName && r.CategoryName == item.Run.CategoryName)
-                                         .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == item.Run.RunnerId) + 1;
-
-                    sb.AppendLine($"**{rankIndex}. {item.Run.RunnerName}** - {item.Run.GameFullName} ({item.Run.CategoryName})");
-                    sb.AppendLine($"└ 🇨🇷 #{natRank} | 🌍 #{item.Run.WorldRank} | ✨ Prestigio: `{item.Prestige:F2} pts`\n");
-                    rankIndex++;
-                }
-
-                embed.WithDescription(embed.Description + sb.ToString());
                 await command.FollowupAsync(embed: embed.Build());
             }
-            else if (subCommand.Name == "players")
+            else if (command.CommandName == "nr")
             {
-                var playersScore = allRuns
-                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
-                    .GroupBy(r => r.RunnerName)
-                    .Select(g => {
-                        double totalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0);
-                        return new { RunnerName = g.Key, TotalPrestige = totalPrestige, RunCount = g.Count() };
-                    })
-                    .OrderByDescending(x => x.TotalPrestige)
-                    .Take(20)
-                    .ToList();
+                var allRuns = await repo.GetRankingAsync("", "");
+                var nrs = allRuns.GroupBy(r => new { r.GameFullName, r.CategoryName }).Select(g => g.OrderBy(r => r.TimeInSeconds).First()).OrderBy(r => r.GameFullName).ToList();
+                var sb = new StringBuilder().AppendLine("🏆 RÉCORDS NACIONALES OFICIALES 🏆\n");
+                foreach (var nr in nrs) sb.AppendLine($"- {nr.GameFullName} ({nr.CategoryName}): {nr.RunnerName} [{FormatTime(nr.TimeInSeconds)}]");
 
-                if (!playersScore.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
+                string ticks = new string('`', 3);
+                await command.FollowupAsync($"{ticks}text\n{sb}{ticks}");
+            }
+            else if (command.CommandName == "top")
+            {
+                var subCommand = command.Data.Options.First();
+                var allRuns = await repo.GetRankingAsync("", "");
 
-                var embed = new EmbedBuilder()
-                    .WithTitle("🎖️ Top 20 Jugadores por Prestigio Total")
-                    .WithColor(Color.Gold)
-                    .WithDescription("Calculado sumando el prestigio de *todas* las runs del jugador.\n\n");
-
-                var sb = new StringBuilder();
-                int rankIndex = 1;
-                foreach (var p in playersScore)
+                if (subCommand.Name == "runs")
                 {
-                    string medal = rankIndex switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"**{rankIndex}.**" };
-                    sb.AppendLine($"{medal} **{p.RunnerName}** - `{p.TotalPrestige:F0} pts` *(en {p.RunCount} runs)*");
-                    rankIndex++;
+                    var validRuns = allRuns
+                        .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                        .Select(r => new {
+                            Run = r,
+                            Weight = (double)r.WorldRank / r.TotalGlobalRunners,
+                            Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
+                        })
+                        .OrderBy(x => x.Weight)
+                        .Take(20)
+                        .ToList();
+
+                    if (!validRuns.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
+
+                    var embed = new EmbedBuilder()
+                        .WithTitle("🌟 Top 20 Mejores Runs de Costa Rica")
+                        .WithColor(Color.Magenta)
+                        .WithDescription("Calculado mediante percentil global (`Rank Global / Total Runners`).\n\n");
+
+                    var sb = new StringBuilder();
+                    int rankIndex = 1;
+                    foreach (var item in validRuns)
+                    {
+                        var natRank = allRuns.Where(r => r.GameFullName == item.Run.GameFullName && r.CategoryName == item.Run.CategoryName)
+                                             .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == item.Run.RunnerId) + 1;
+
+                        sb.AppendLine($"**{rankIndex}. {item.Run.RunnerName}** - {item.Run.GameFullName} ({item.Run.CategoryName})");
+                        sb.AppendLine($"└ 🇨🇷 #{natRank} | 🌍 #{item.Run.WorldRank} | ✨ Prestigio: `{item.Prestige:F2} pts`\n");
+                        rankIndex++;
+                    }
+
+                    embed.WithDescription(embed.Description + sb.ToString());
+                    await command.FollowupAsync(embed: embed.Build());
+                }
+                else if (subCommand.Name == "players")
+                {
+                    var playersScore = allRuns
+                        .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                        .GroupBy(r => r.RunnerName)
+                        .Select(g => {
+                            double totalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0);
+                            return new { RunnerName = g.Key, TotalPrestige = totalPrestige, RunCount = g.Count() };
+                        })
+                        .OrderByDescending(x => x.TotalPrestige)
+                        .Take(20)
+                        .ToList();
+
+                    if (!playersScore.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
+
+                    var embed = new EmbedBuilder()
+                        .WithTitle("🎖️ Top 20 Jugadores por Prestigio Total")
+                        .WithColor(Color.Gold)
+                        .WithDescription("Calculado sumando el prestigio de *todas* las runs del jugador.\n\n");
+
+                    var sb = new StringBuilder();
+                    int rankIndex = 1;
+                    foreach (var p in playersScore)
+                    {
+                        string medal = rankIndex switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"**{rankIndex}.**" };
+                        sb.AppendLine($"{medal} **{p.RunnerName}** - `{p.TotalPrestige:F0} pts` *(en {p.RunCount} runs)*");
+                        rankIndex++;
+                    }
+
+                    embed.WithDescription(embed.Description + sb.ToString());
+                    await command.FollowupAsync(embed: embed.Build());
+                }
+            }
+            else if (command.CommandName == "player")
+            {
+                if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}>."); return; }
+                var user = command.Data.Options.First().Value.ToString()!;
+                var all = await repo.GetRankingAsync("", "");
+                var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
+
+                double totalPrestigeScore = 0;
+                foreach (var r in pRuns)
+                {
+                    if (r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    {
+                        double weight = (double)r.WorldRank / r.TotalGlobalRunners;
+                        double points = (1.0 - weight) * 100.0;
+                        if (points > 0) totalPrestigeScore += points;
+                    }
                 }
 
-                embed.WithDescription(embed.Description + sb.ToString());
+                var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
+                var embed = new EmbedBuilder()
+                    .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}").WithUrl(profileUrl)
+                    .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`")
+                    .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
+
+                foreach (var run in pRuns.Take(15))
+                {
+                    var natRank = all.Where(r => r.GameFullName == run.GameFullName && r.CategoryName == run.CategoryName)
+                                     .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == run.RunnerId) + 1;
+
+                    string weightDisplay = "";
+                    if (run.TotalGlobalRunners > 0 && run.WorldRank > 0)
+                    {
+                        double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
+                        double runPrestige = (1.0 - runWeight) * 100.0;
+                        weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%)";
+                    }
+
+                    embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank CR: #{natRank} | 🌍 Global: #{run.WorldRank} de {run.TotalGlobalRunners}{weightDisplay}");
+                }
+                await command.FollowupAsync(embed: embed.Build());
+            }
+            else if (command.CommandName == "players")
+            {
+                var mode = command.Data.Options.FirstOrDefault()?.Value?.ToString();
+                var allInDb = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().OrderBy(n => n).ToList();
+                var synced = File.Exists(_syncedRunnersPath) ? new HashSet<string>(await File.ReadAllLinesAsync(_syncedRunnersPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+
+                var embed = new EmbedBuilder().WithTitle("👥 Directorio de Speedrunners").WithColor(Color.Blue).WithFooter($"Total en DB: {allInDb.Count}");
+
+                if (mode == "unsynced")
+                {
+                    var missing = allInDb.Where(n => !synced.Contains(n)).ToList();
+                    embed.WithDescription(missing.Any() ? string.Join(", ", missing) : "Todos los perfiles están sincronizados.");
+                    embed.WithTitle("⚠️ Runners Pendientes de Registro Completo");
+                }
+                else if (mode == "all") embed.WithDescription(string.Join(", ", allInDb));
+                else embed.WithDescription($"Actualmente hay **{allInDb.Count}** runners registrados y **{allInDb.Count(n => !synced.Contains(n))}** pendientes.");
+
+                await command.FollowupAsync(embed: embed.Build());
+            }
+            else if (command.CommandName == "help")
+            {
+                var embed = new EmbedBuilder().WithTitle("📖 Guía de Speedrun Bot").WithColor(Color.Blue)
+                    .AddField("🚀 `/register usuario [nombre]`", "Registra un corredor e importa sus PBs.")
+                    .AddField("🎮 `/game [opción]`", "Gestión de juegos, tops y más recientes.")
+                    .AddField("🏆 `/ranking [juego] [categoría]`", "Muestra el top nacional.")
+                    .AddField("🌟 `/top [runs/players]`", "Muestra leaderboards competitivos basados en puntos de prestigio.")
+                    .AddField("🥇 `/nr`", "Lista todos los Récords Nacionales.")
+                    .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor con su prestigio.")
+                    .AddField("👥 `/players`", "Directorio de runners.")
+                    .AddField("⚙️ `/setup`", "Configuración inicial (Admins).")
+                    .WithFooter("Pura vida speedrunning 🇨🇷");
                 await command.FollowupAsync(embed: embed.Build());
             }
         }
-        else if (command.CommandName == "player")
+        catch (Exception ex)
         {
-            if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}>."); return; }
-            var user = command.Data.Options.First().Value.ToString()!;
-            var all = await repo.GetRankingAsync("", "");
-            var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
-
-            double totalPrestigeScore = 0;
-            foreach (var r in pRuns)
-            {
-                if (r.TotalGlobalRunners > 0 && r.WorldRank > 0)
-                {
-                    double weight = (double)r.WorldRank / r.TotalGlobalRunners;
-                    double points = (1.0 - weight) * 100.0;
-                    if (points > 0) totalPrestigeScore += points;
-                }
-            }
-
-            var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
-            var embed = new EmbedBuilder()
-                .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}").WithUrl(profileUrl)
-                .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`")
-                .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
-
-            foreach (var run in pRuns.Take(15))
-            {
-                var natRank = all.Where(r => r.GameFullName == run.GameFullName && r.CategoryName == run.CategoryName)
-                                 .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == run.RunnerId) + 1;
-
-                string weightDisplay = "";
-                if (run.TotalGlobalRunners > 0 && run.WorldRank > 0)
-                {
-                    double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
-                    double runPrestige = (1.0 - runWeight) * 100.0;
-                    weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%)";
-                }
-
-                embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank CR: #{natRank} | 🌍 Global: #{run.WorldRank} de {run.TotalGlobalRunners}{weightDisplay}");
-            }
-            await command.FollowupAsync(embed: embed.Build());
-        }
-        else if (command.CommandName == "players")
-        {
-            var mode = command.Data.Options.FirstOrDefault()?.Value?.ToString();
-            var allInDb = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().OrderBy(n => n).ToList();
-            var synced = File.Exists(_syncedRunnersPath) ? new HashSet<string>(await File.ReadAllLinesAsync(_syncedRunnersPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
-
-            var embed = new EmbedBuilder().WithTitle("👥 Directorio de Speedrunners").WithColor(Color.Blue).WithFooter($"Total en DB: {allInDb.Count}");
-
-            if (mode == "unsynced")
-            {
-                var missing = allInDb.Where(n => !synced.Contains(n)).ToList();
-                embed.WithDescription(missing.Any() ? string.Join(", ", missing) : "Todos los perfiles están sincronizados.");
-                embed.WithTitle("⚠️ Runners Pendientes de Registro Completo");
-            }
-            else if (mode == "all") embed.WithDescription(string.Join(", ", allInDb));
-            else embed.WithDescription($"Actualmente hay **{allInDb.Count}** runners registrados y **{allInDb.Count(n => !synced.Contains(n))}** pendientes.");
-
-            await command.FollowupAsync(embed: embed.Build());
-        }
-        else if (command.CommandName == "help")
-        {
-            var embed = new EmbedBuilder().WithTitle("📖 Guía de Speedrun Bot").WithColor(Color.Blue)
-                .AddField("🚀 `/register usuario [nombre]`", "Registra un corredor e importa sus PBs.")
-                .AddField("🎮 `/game [opción]`", "Gestión de juegos, tops y más recientes.")
-                .AddField("🏆 `/ranking [juego] [categoría]`", "Muestra el top nacional.")
-                .AddField("🌟 `/top [runs/players]`", "Muestra leaderboards competitivos basados en puntos de prestigio.")
-                .AddField("🥇 `/nr`", "Lista todos los Récords Nacionales.")
-                .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor con su prestigio.")
-                .AddField("👥 `/players`", "Directorio de runners.")
-                .AddField("⚙️ `/setup`", "Configuración inicial (Admins).")
-                .WithFooter("Pura vida speedrunning 🇨🇷");
-            await command.FollowupAsync(embed: embed.Build());
+            Console.WriteLine($"❌ Error procesando comando {command.CommandName}: {ex.Message}");
+            await command.FollowupAsync($"⚠️ Ocurrió un error interno procesando la solicitud: {ex.Message}");
         }
     }
 
