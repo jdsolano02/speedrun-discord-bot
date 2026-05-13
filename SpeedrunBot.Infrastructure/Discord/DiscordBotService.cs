@@ -91,8 +91,10 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var playerCommand = new SlashCommandBuilder().WithName("player").WithDescription("View a runner's profile.")
                     .AddOption("usuario", ApplicationCommandOptionType.String, "Runner name", isRequired: true, isAutocomplete: true);
 
+                // NEW: Added the optional "juego" parameter to the players command
                 var playersCommand = new SlashCommandBuilder().WithName("players").WithDescription("Show registered runners list.")
-                    .AddOption(new SlashCommandOptionBuilder().WithName("lista").WithDescription("Select the list view mode.").WithType(ApplicationCommandOptionType.String).AddChoice("Full List", "all").AddChoice("Unsynced Runners", "unsynced"));
+                    .AddOption(new SlashCommandOptionBuilder().WithName("lista").WithDescription("Select the list view mode.").WithType(ApplicationCommandOptionType.String).AddChoice("Full List", "all").AddChoice("Unsynced Runners", "unsynced"))
+                    .AddOption("juego", ApplicationCommandOptionType.String, "Filter by specific game", isRequired: false, isAutocomplete: true);
 
                 var gameCommand = new SlashCommandBuilder().WithName("game").WithDescription("Manage and view monitored games.")
                     .AddOption(new SlashCommandOptionBuilder().WithName("add").WithDescription("Add a game to watchlist (DataTakers).").WithType(ApplicationCommandOptionType.SubCommand)
@@ -199,7 +201,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                         if (!isDataHelper) { await command.FollowupAsync("🚫 Solo DataTakers/Admins."); return; }
                         var idAdd = subCommand.Options.First().Value.ToString()!;
 
-                        // NEW: Pre-check to verify if the game is already in the database
                         var currentlyTracked = await gameRepo.GetTrackedGamesAsync();
                         if (currentlyTracked.Any(id => id.Equals(idAdd, StringComparison.OrdinalIgnoreCase)))
                         {
@@ -481,22 +482,61 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             }
             else if (command.CommandName == "players")
             {
-                var mode = command.Data.Options.FirstOrDefault()?.Value?.ToString();
-                var allInDb = (await repo.GetRankingAsync("", "")).Select(r => r.RunnerName).Distinct().OrderBy(n => n).ToList();
+                // NEW: Logic for filtering by specific game and implementing safe Discord limits handling
+                var mode = command.Data.Options.FirstOrDefault(x => x.Name == "lista")?.Value?.ToString();
+                var juegoFilter = command.Data.Options.FirstOrDefault(x => x.Name == "juego")?.Value?.ToString();
+
+                var allRuns = await repo.GetRankingAsync(juegoFilter ?? "", "");
+                var targetRunners = allRuns.Select(r => r.RunnerName).Distinct().OrderBy(n => n).ToList();
+
+                if (!targetRunners.Any())
+                {
+                    await command.FollowupAsync(string.IsNullOrEmpty(juegoFilter) ? "No se encontraron corredores." : $"No hay corredores registrados para `{juegoFilter}`.");
+                    return;
+                }
+
                 var synced = File.Exists(_syncedRunnersPath) ? new HashSet<string>(await File.ReadAllLinesAsync(_syncedRunnersPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
 
-                var embed = new EmbedBuilder().WithTitle("👥 Directorio de Speedrunners").WithColor(Color.Blue).WithFooter($"Total en DB: {allInDb.Count}");
+                string title = "👥 Directorio de Speedrunners";
+                string description = "";
 
-                if (mode == "unsynced")
+                if (!string.IsNullOrEmpty(juegoFilter))
                 {
-                    var missing = allInDb.Where(n => !synced.Contains(n)).ToList();
-                    embed.WithDescription(missing.Any() ? string.Join(", ", missing) : "Todos los perfiles están sincronizados.");
-                    embed.WithTitle("⚠️ Runners Pendientes de Registro Completo");
+                    title = $"🎮 Runners de: {juegoFilter}";
+                    description = string.Join(", ", targetRunners);
                 }
-                else if (mode == "all") embed.WithDescription(string.Join(", ", allInDb));
-                else embed.WithDescription($"Actualmente hay **{allInDb.Count}** runners registrados y **{allInDb.Count(n => !synced.Contains(n))}** pendientes.");
+                else if (mode == "unsynced")
+                {
+                    var missing = targetRunners.Where(n => !synced.Contains(n)).ToList();
+                    description = missing.Any() ? string.Join(", ", missing) : "Todos los perfiles están sincronizados.";
+                    title = "⚠️ Runners Pendientes de Registro Completo";
+                    targetRunners = missing; // Update for accurate count in footer
+                }
+                else if (mode == "all")
+                {
+                    description = string.Join(", ", targetRunners);
+                }
+                else
+                {
+                    description = $"Actualmente hay **{targetRunners.Count}** runners registrados y **{targetRunners.Count(n => !synced.Contains(n))}** pendientes.";
+                }
 
-                await command.FollowupAsync(embed: embed.Build());
+                // If string exceeds Embed Description Limit (4096 characters), send as plain text file to prevent crash
+                if (description.Length > 4000)
+                {
+                    using var stream = new MemoryStream(Encoding.UTF8.GetBytes(description));
+                    await command.FollowupWithFileAsync(stream, "runners.txt", $"📄 **{title}**\n*(Lista demasiado larga para Discord, enviada como archivo adjunto. Total: **{targetRunners.Count}**)*");
+                }
+                else
+                {
+                    var embed = new EmbedBuilder()
+                        .WithTitle(title)
+                        .WithColor(Color.Blue)
+                        .WithDescription(description)
+                        .WithFooter($"Total: {targetRunners.Count}");
+
+                    await command.FollowupAsync(embed: embed.Build());
+                }
             }
             else if (command.CommandName == "help")
             {
@@ -507,7 +547,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     .AddField("🌟 `/top [runs/players]`", "Muestra leaderboards competitivos basados en puntos de prestigio.")
                     .AddField("🥇 `/nr`", "Lista todos los Récords Nacionales.")
                     .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor con su prestigio.")
-                    .AddField("👥 `/players`", "Directorio de runners.")
+                    .AddField("👥 `/players`", "Directorio general o filtrado por juego.")
                     .AddField("⚙️ `/setup`", "Configuración inicial (Admins).")
                     .WithFooter("Pura vida speedrunning 🇨🇷");
                 await command.FollowupAsync(embed: embed.Build());
