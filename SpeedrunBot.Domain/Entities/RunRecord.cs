@@ -15,4 +15,5 @@ public record RunRecord
     public string GameThumbnail { get; init; } = string.Empty; // URL to the game's cover art or icon.
     public int WorldRank { get; init; } // Position of the run in the global leaderboard.
     public DateTime? DateSubmitted { get; init; } // Tracks when the run was submitted
+    public int TotalGlobalRunners { get; init; } //Total count of runners in the global leaderboard for competitive weight calculation.
 }

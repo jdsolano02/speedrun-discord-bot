@@ -23,8 +23,14 @@ public class SpeedrunContext : DbContext
         modelBuilder.Entity<TrackedGame>().HasKey(g => g.GameId);
         modelBuilder.Entity<GuildConfig>().HasKey(gc => gc.GuildId);
 
-        // Index for performance optimization on ranking queries.
+        // Unique index for RunLink to ensure fast duplicate detection.
         modelBuilder.Entity<RunRecord>()
-            .HasIndex(r => new { r.GameFullName, r.CategoryName, r.TimeInSeconds });
+            .HasIndex(r => r.RunLink)
+            .IsUnique();
+
+        //Composite index for performance optimization on ranking and activity queries.
+        modelBuilder.Entity<RunRecord>()
+            .HasIndex(r => new { r.GameFullName, r.CategoryName, r.TimeInSeconds, r.DateSubmitted });
     }
 }
+

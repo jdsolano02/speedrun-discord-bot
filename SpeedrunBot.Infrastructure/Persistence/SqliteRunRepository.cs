@@ -71,9 +71,43 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         if (!string.IsNullOrWhiteSpace(gameFullName))
             query = query.Where(r => r.GameFullName == gameFullName);
 
-        if (!string.IsNullOrWhiteSpace(categoryName) && categoryName != "ALL_CATEGORIES")
-            query = query.Where(r => r.CategoryName == categoryName);
+        // NEW: Case-insensitive check to safely identify "ALL_CATEGORIES" regardless of user input
+        bool isAllCategories = string.IsNullOrWhiteSpace(categoryName) ||
+                               categoryName.Equals("ALL_CATEGORIES", StringComparison.OrdinalIgnoreCase);
 
-        return await query.OrderBy(r => r.TimeInSeconds).ToListAsync();
+        if (!isAllCategories)
+        {
+            // Specific category filtering
+            query = query.Where(r => r.CategoryName == categoryName);
+            return await query.OrderBy(r => r.TimeInSeconds).ToListAsync();
+        }
+        else
+        {
+            // NEW: If all categories, sort by CategoryName first, then by TimeInSeconds
+            // This is essential for the Discord Embed to visually group runs under their respective category headers
+            return await query
+                .OrderBy(r => r.CategoryName)
+                .ThenBy(r => r.TimeInSeconds)
+                .ToListAsync();
+        }
+    }
+
+    // NEW: Retrieves a list of recently active games based on the newest run submissions.
+    // Use this to power your /game recent command for accurate chronological ordering.
+    public async Task<List<string>> GetRecentlyActiveGamesAsync(int limit = 15)
+    {
+        return await context.Runs
+            .Where(r => r.DateSubmitted != null)
+            .GroupBy(r => r.GameFullName)
+            .Select(g => new
+            {
+                GameName = g.Key,
+                // Find the most recent submission date for any run in this game
+                LastActiveDate = g.Max(r => r.DateSubmitted)
+            })
+            .OrderByDescending(x => x.LastActiveDate)
+            .Select(x => x.GameName)
+            .Take(limit)
+            .ToListAsync();
     }
 }

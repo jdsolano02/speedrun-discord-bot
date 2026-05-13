@@ -15,7 +15,8 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddHttpClient<ISpeedrunApi, SpeedrunApiClient>(client =>
 {
     client.BaseAddress = new Uri("https://www.speedrun.com/api/v1/");
-    client.Timeout = TimeSpan.FromSeconds(15);
+    // NEW: Increased timeout from 15 to 30 seconds to prevent cancellations on heavy leaderboards
+    client.Timeout = TimeSpan.FromSeconds(30);
 });
 
 // Register SQLite Persistence
@@ -82,6 +83,14 @@ using (var scope = host.Services.CreateScope())
         // Safely add NrPingRoleId column to GuildConfigs table (ulong stored as INTEGER)
         db.Database.ExecuteSqlRaw("ALTER TABLE GuildConfigs ADD COLUMN NrPingRoleId INTEGER NOT NULL DEFAULT 0;");
         logger.LogInformation("✨ [Schema Update] 'NrPingRoleId' column added to GuildConfigs.");
+    }
+    catch { /* Column already exists, safe to ignore */ }
+
+    // Safely add TotalGlobalRunners for competitive weight calculations
+    try
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN TotalGlobalRunners INTEGER NOT NULL DEFAULT 0;");
+        logger.LogInformation("✨ [Schema Update] 'TotalGlobalRunners' column added to Runs.");
     }
     catch { /* Column already exists, safe to ignore */ }
 

@@ -123,7 +123,9 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                 RunLink = item.Run.Weblink,
                 GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
                 WorldRank = item.Place,
-                DateSubmitted = item.Run.Submitted ?? item.Run.Date
+                DateSubmitted = item.Run.Submitted ?? item.Run.Date,
+                // Default to 0 when registering via Discord. It will be updated correctly during the massive scan worker cycle.
+                TotalGlobalRunners = 0
             });
         }
 
@@ -140,8 +142,14 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
         var lbResponse = await GetWithRateLimitAsync<ApiResponse<LeaderboardDto>>(url);
         if (lbResponse?.Data == null) return;
 
+        //Count the total number of runs in this leaderboard to calculate competitive weight later.
+        int totalRunnersInLeaderboard = lbResponse.Data.Runs.Count;
+
+        // Strict country code matching to prevent false positives (fixes Pou bug)
         var crPlayers = lbResponse.Data.Players.Data
-            .Where(p => !string.IsNullOrEmpty(p.Id) && p.Location?.Country?.Code == countryCode)
+            .Where(p => !string.IsNullOrEmpty(p.Id) &&
+                        p.Location?.Country?.Code != null &&
+                        p.Location.Country.Code.Equals(countryCode, StringComparison.OrdinalIgnoreCase))
             .DistinctBy(p => p.Id)
             .ToDictionary(p => p.Id!, p => p.Names.International);
 
@@ -163,7 +171,9 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                     RunLink = runItem.Run.Weblink,
                     GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
                     WorldRank = runItem.Place,
-                    DateSubmitted = runItem.Run.Submitted ?? runItem.Run.Date
+                    DateSubmitted = runItem.Run.Submitted ?? runItem.Run.Date,
+                    //Inject the total count into the database model
+                    TotalGlobalRunners = totalRunnersInLeaderboard
                 });
             }
         }

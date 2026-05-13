@@ -94,7 +94,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var playersCommand = new SlashCommandBuilder().WithName("players").WithDescription("Show registered runners list.")
                     .AddOption(new SlashCommandOptionBuilder().WithName("lista").WithDescription("Select the list view mode.").WithType(ApplicationCommandOptionType.String).AddChoice("Full List", "all").AddChoice("Unsynced Runners", "unsynced"));
 
-                // NEW: /game Command Structure
                 var gameCommand = new SlashCommandBuilder().WithName("game").WithDescription("Manage and view monitored games.")
                     .AddOption(new SlashCommandOptionBuilder().WithName("add").WithDescription("Add a game to watchlist (DataTakers).").WithType(ApplicationCommandOptionType.SubCommand)
                         .AddOption("id_src", ApplicationCommandOptionType.String, "Speedrun.com Abbreviation", isRequired: true))
@@ -104,6 +103,10 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     .AddOption(new SlashCommandOptionBuilder().WithName("recent").WithDescription("Top 15 games with most recent CR runs.").WithType(ApplicationCommandOptionType.SubCommand))
                     .AddOption(new SlashCommandOptionBuilder().WithName("most_played").WithDescription("Top games by number of CR runners.").WithType(ApplicationCommandOptionType.SubCommand));
 
+                var topCommand = new SlashCommandBuilder().WithName("top").WithDescription("Competitive leaderboards based on prestige.")
+                    .AddOption(new SlashCommandOptionBuilder().WithName("runs").WithDescription("Top 20 best individual runs by competitive weight.").WithType(ApplicationCommandOptionType.SubCommand))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("players").WithDescription("Top 20 players by total accumulated prestige score.").WithType(ApplicationCommandOptionType.SubCommand));
+
                 var helpCommand = new SlashCommandBuilder().WithName("help").WithDescription("Display the user guide.");
                 var devCommand = new SlashCommandBuilder().WithName("dev").WithDescription("Información sobre el desarrollador.");
 
@@ -111,7 +114,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 {
                     setupCommand.Build(), updateCommand.Build(), registerCommand.Build(), rankCommand.Build(),
                     nrCommand.Build(), playerCommand.Build(), playersCommand.Build(), gameCommand.Build(),
-                    helpCommand.Build(), devCommand.Build()
+                    topCommand.Build(), helpCommand.Build(), devCommand.Build()
                 };
 
                 await _client.BulkOverwriteGlobalApplicationCommandsAsync(commands);
@@ -139,7 +142,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
         bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
 
-        // Setup & Update Logic
         if (command.CommandName == "setup" || command.CommandName == "update")
         {
             if (!isAdmin) { await command.FollowupAsync("🚫 Permisos insuficientes."); return; }
@@ -152,7 +154,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             if (command.Data.Options.FirstOrDefault(x => x.Name == "player_count")?.Value is IChannel chC) config.PlayersChannelId = chC.Id;
             if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_data_helpers")?.Value is IRole rDH) config.DataMakerRoleId = rDH.Id;
 
-            // Assign NR Ping Role
             if (command.Data.Options.FirstOrDefault(x => x.Name == "rol_notificaciones_nr")?.Value is IRole rNR) config.NrPingRoleId = rNR.Id;
 
             await db.SaveChangesAsync();
@@ -161,9 +162,9 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             {
                 var welcomeMsg = "✅ **Servidor configurado correctamente.**\n\n" +
                                  "*Hola! Mi nombre es realxones o jdsolano02, gracias por incluir mi bot en tu Discord.*\n\n" +
-                                 "*Si quieres apoyar a mantener corriendo el bot de manera gratuita para toda la comunidad, considera dejar tu propina aquí:* https://streamelements.com/realxones/tip \n" +
-                                 "Puedes revisar la documentación del bot aquí: https://github.com/jdsolano02/speedrun-discord-bot \n" +
-                                 "También revisa mis redes sociales: https://linktr.ee/Xones \n" +
+                                 "*Si quieres apoyar a mantener corriendo el bot de manera gratuita para toda la comunidad, considera dejar tu propina aquí:* [https://streamelements.com/realxones/tip](https://streamelements.com/realxones/tip) \n" +
+                                 "Puedes revisar la documentación del bot aquí: [https://github.com/jdsolano02/speedrun-discord-bot](https://github.com/jdsolano02/speedrun-discord-bot) \n" +
+                                 "También revisa mis redes sociales: [https://linktr.ee/Xones](https://linktr.ee/Xones) \n" +
                                  "**¡Muchas gracias por tu apoyo!**";
                 await command.FollowupAsync(welcomeMsg);
             }
@@ -178,13 +179,12 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
 
         if (command.CommandName == "dev")
         {
-            await command.FollowupAsync("*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n*Apoya el bot:* https://streamelements.com/realxones/tip \nGithub: https://github.com/jdsolano02/speedrun-discord-bot");
+            await command.FollowupAsync("*Hola! Mi nombre es realxones o jdsolano02, desarrollador del bot.*\n\n*Apoya el bot:* [https://streamelements.com/realxones/tip](https://streamelements.com/realxones/tip) \nGithub: [https://github.com/jdsolano02/speedrun-discord-bot](https://github.com/jdsolano02/speedrun-discord-bot)");
             return;
         }
 
         if (gConfig == null) { await command.FollowupAsync("⚠️ El bot no está configurado. Un admin debe usar `/setup`."); return; }
 
-        // NEW: Game Command Logic
         if (command.CommandName == "game")
         {
             var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
@@ -223,14 +223,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     break;
 
                 case "recent":
-                    var allForRecent = await repo.GetRankingAsync("", "");
-                    var recentGames = allForRecent
-                        .Where(r => r.DateSubmitted.HasValue)
-                        .OrderByDescending(r => r.DateSubmitted)
-                        .Select(r => r.GameFullName)
-                        .Distinct()
-                        .Take(15);
-
+                    var recentGames = await repo.GetRecentlyActiveGamesAsync(15);
                     var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
                         .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
                     await command.FollowupAsync(embed: embedR.Build());
@@ -251,7 +244,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             return;
         }
 
-        // Remaining Commands (Register, Ranking, NR, Player, Players, Help)
         if (command.CommandName == "register")
         {
             if (command.ChannelId != gConfig.RegisterChannelId) { await command.FollowupAsync($"❌ Usa este comando en <#{gConfig.RegisterChannelId}>"); return; }
@@ -303,22 +295,35 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}> para rankings."); return; }
             var juego = command.Data.Options.First(x => x.Name == "juego").Value?.ToString() ?? "";
             var cat = command.Data.Options.First(x => x.Name == "categoria").Value?.ToString() ?? "";
-            var runs = await repo.GetRankingAsync(juego, cat == "ALL_CATEGORIES" ? "" : cat);
+
+            bool isAllCategories = string.IsNullOrWhiteSpace(cat) || cat.Equals("ALL_CATEGORIES", StringComparison.OrdinalIgnoreCase);
+            var runs = await repo.GetRankingAsync(juego, isAllCategories ? "" : cat);
+
             if (!runs.Any()) { await command.FollowupAsync("Sin registros."); return; }
 
-            var embed = new EmbedBuilder().WithTitle(cat == "ALL_CATEGORIES" ? $"📚 {juego} (Resumen)" : $"🏆 Ranking: {juego}").WithColor(Color.Blue).WithThumbnailUrl(runs[0].GameThumbnail);
-            if (cat == "ALL_CATEGORIES")
+            var embed = new EmbedBuilder().WithTitle(isAllCategories ? $"📚 {juego} (Resumen General)" : $"🏆 Ranking: {juego}").WithColor(Color.Blue).WithThumbnailUrl(runs[0].GameThumbnail);
+
+            if (isAllCategories)
             {
                 foreach (var group in runs.GroupBy(r => r.CategoryName))
                 {
-                    var best = group.OrderBy(r => r.TimeInSeconds).First();
-                    embed.AddField(group.Key, $"🥇 **{best.RunnerName}**: {FormatTime(best.TimeInSeconds)} (🌍 #{best.WorldRank})");
+                    var categoryRuns = group.ToList();
+                    var sb = new StringBuilder();
+                    int pos = 1;
+
+                    for (int i = 0; i < categoryRuns.Count && i < 10; i++)
+                    {
+                        if (i > 0 && categoryRuns[i].TimeInSeconds > categoryRuns[i - 1].TimeInSeconds) pos = i + 1;
+                        string medal = pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" };
+                        sb.AppendLine($"{medal} **{categoryRuns[i].RunnerName}**: {FormatTime(categoryRuns[i].TimeInSeconds)}");
+                    }
+                    embed.AddField(group.Key, sb.ToString());
                 }
             }
             else
             {
                 int pos = 1;
-                for (int i = 0; i < runs.Count && i < 10; i++)
+                for (int i = 0; i < runs.Count && i < 15; i++)
                 {
                     if (i > 0 && runs[i].TimeInSeconds > runs[i - 1].TimeInSeconds) pos = i + 1;
                     embed.AddField($"{pos switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"#{pos}" }} {runs[i].RunnerName}", $"**Tiempo:** {FormatTime(runs[i].TimeInSeconds)} | 🌍 #{runs[i].WorldRank}");
@@ -332,7 +337,81 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             var nrs = allRuns.GroupBy(r => new { r.GameFullName, r.CategoryName }).Select(g => g.OrderBy(r => r.TimeInSeconds).First()).OrderBy(r => r.GameFullName).ToList();
             var sb = new StringBuilder().AppendLine("🏆 RÉCORDS NACIONALES OFICIALES 🏆\n");
             foreach (var nr in nrs) sb.AppendLine($"- {nr.GameFullName} ({nr.CategoryName}): {nr.RunnerName} [{FormatTime(nr.TimeInSeconds)}]");
+
             await command.FollowupAsync($"```text\n{sb}```");
+        }
+        else if (command.CommandName == "top")
+        {
+            var subCommand = command.Data.Options.First();
+            var allRuns = await repo.GetRankingAsync("", "");
+
+            if (subCommand.Name == "runs")
+            {
+                var validRuns = allRuns
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .Select(r => new {
+                        Run = r,
+                        Weight = (double)r.WorldRank / r.TotalGlobalRunners,
+                        Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
+                    })
+                    .OrderBy(x => x.Weight)
+                    .Take(20)
+                    .ToList();
+
+                if (!validRuns.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
+
+                var embed = new EmbedBuilder()
+                    .WithTitle("🌟 Top 20 Mejores Runs de Costa Rica")
+                    .WithColor(Color.Magenta)
+                    .WithDescription("Calculado mediante percentil global (`Rank Global / Total Runners`).\n\n");
+
+                var sb = new StringBuilder();
+                int rankIndex = 1;
+                foreach (var item in validRuns)
+                {
+                    var natRank = allRuns.Where(r => r.GameFullName == item.Run.GameFullName && r.CategoryName == item.Run.CategoryName)
+                                         .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == item.Run.RunnerId) + 1;
+
+                    sb.AppendLine($"**{rankIndex}. {item.Run.RunnerName}** - {item.Run.GameFullName} ({item.Run.CategoryName})");
+                    sb.AppendLine($"└ 🇨🇷 #{natRank} | 🌍 #{item.Run.WorldRank} | ✨ Prestigio: `{item.Prestige:F2} pts`\n");
+                    rankIndex++;
+                }
+
+                embed.WithDescription(embed.Description + sb.ToString());
+                await command.FollowupAsync(embed: embed.Build());
+            }
+            else if (subCommand.Name == "players")
+            {
+                var playersScore = allRuns
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .GroupBy(r => r.RunnerName)
+                    .Select(g => {
+                        double totalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0);
+                        return new { RunnerName = g.Key, TotalPrestige = totalPrestige, RunCount = g.Count() };
+                    })
+                    .OrderByDescending(x => x.TotalPrestige)
+                    .Take(20)
+                    .ToList();
+
+                if (!playersScore.Any()) { await command.FollowupAsync("Aún no hay suficientes datos globales recolectados."); return; }
+
+                var embed = new EmbedBuilder()
+                    .WithTitle("🎖️ Top 20 Jugadores por Prestigio Total")
+                    .WithColor(Color.Gold)
+                    .WithDescription("Calculado sumando el prestigio de *todas* las runs del jugador.\n\n");
+
+                var sb = new StringBuilder();
+                int rankIndex = 1;
+                foreach (var p in playersScore)
+                {
+                    string medal = rankIndex switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"**{rankIndex}.**" };
+                    sb.AppendLine($"{medal} **{p.RunnerName}** - `{p.TotalPrestige:F0} pts` *(en {p.RunCount} runs)*");
+                    rankIndex++;
+                }
+
+                embed.WithDescription(embed.Description + sb.ToString());
+                await command.FollowupAsync(embed: embed.Build());
+            }
         }
         else if (command.CommandName == "player")
         {
@@ -342,17 +421,37 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
             if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
 
+            double totalPrestigeScore = 0;
+            foreach (var r in pRuns)
+            {
+                if (r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                {
+                    double weight = (double)r.WorldRank / r.TotalGlobalRunners;
+                    double points = (1.0 - weight) * 100.0;
+                    if (points > 0) totalPrestigeScore += points;
+                }
+            }
+
             var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
             var embed = new EmbedBuilder()
                 .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}").WithUrl(profileUrl)
-                .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\nTotal de runs registradas: **{pRuns.Count}**")
+                .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`")
                 .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
 
             foreach (var run in pRuns.Take(15))
             {
                 var natRank = all.Where(r => r.GameFullName == run.GameFullName && r.CategoryName == run.CategoryName)
                                  .OrderBy(r => r.TimeInSeconds).ToList().FindIndex(r => r.RunnerId == run.RunnerId) + 1;
-                embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank Nacional: #{natRank} | 🌍 Global: #{run.WorldRank}");
+
+                string weightDisplay = "";
+                if (run.TotalGlobalRunners > 0 && run.WorldRank > 0)
+                {
+                    double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
+                    double runPrestige = (1.0 - runWeight) * 100.0;
+                    weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%)";
+                }
+
+                embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank CR: #{natRank} | 🌍 Global: #{run.WorldRank} de {run.TotalGlobalRunners}{weightDisplay}");
             }
             await command.FollowupAsync(embed: embed.Build());
         }
@@ -381,8 +480,9 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 .AddField("🚀 `/register usuario [nombre]`", "Registra un corredor e importa sus PBs.")
                 .AddField("🎮 `/game [opción]`", "Gestión de juegos, tops y más recientes.")
                 .AddField("🏆 `/ranking [juego] [categoría]`", "Muestra el top nacional.")
+                .AddField("🌟 `/top [runs/players]`", "Muestra leaderboards competitivos basados en puntos de prestigio.")
                 .AddField("🥇 `/nr`", "Lista todos los Récords Nacionales.")
-                .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor.")
+                .AddField("👤 `/player [nombre]`", "Muestra el perfil de un corredor con su prestigio.")
                 .AddField("👥 `/players`", "Directorio de runners.")
                 .AddField("⚙️ `/setup`", "Configuración inicial (Admins).")
                 .WithFooter("Pura vida speedrunning 🇨🇷");
@@ -486,9 +586,12 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         }
     }
 
+    // Accurate Millisecond Formatting (00:00:00.000)
     private string FormatTime(double s)
     {
         TimeSpan t = TimeSpan.FromSeconds(s);
-        return t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes:D2}:{t.Seconds:D2}";
+        return t.TotalHours >= 1 ?
+            $"{(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}" :
+            $"{t.Minutes:D2}:{t.Seconds:D2}.{t.Milliseconds:D3}";
     }
 }
