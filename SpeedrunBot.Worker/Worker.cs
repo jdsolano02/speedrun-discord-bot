@@ -35,12 +35,25 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
         var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
 
-        // CHANGED: From == 0 to <= 0. This forces the engine to recalculate all the -1s that survived the deduplication!
-        var pendingBoards = await db.Runs
-            .Where(r => r.TotalGlobalRunners <= 0)
-            .Select(r => new { r.GameId, r.CategoryId, r.VariablesString })
-            .Distinct()
-            .ToListAsync(stoppingToken);
+        // Load all pending runs into memory to safely delete and avoid SQLite string comparison bugs
+        var pendingRuns = await db.Runs.Where(r => r.TotalGlobalRunners <= 0).ToListAsync(stoppingToken);
+
+        // NEW: INTEGRITY SCAN - Identify and destroy corrupted runs (Missing IDs)
+        var corruptRuns = pendingRuns.Where(r => string.IsNullOrWhiteSpace(r.CategoryId)).ToList();
+        if (corruptRuns.Any())
+        {
+            foreach (var r in corruptRuns)
+            {
+                logger.LogWarning("🗑️ [AUTO-CLEAN] Borrando run corrupta: {runner} en {game} ({cat})", r.RunnerId, r.GameFullName, r.CategoryName);
+            }
+            db.Runs.RemoveRange(corruptRuns);
+            await db.SaveChangesAsync(stoppingToken);
+
+            // Filter them out from our local list to continue processing healthy runs
+            pendingRuns = pendingRuns.Where(r => !string.IsNullOrWhiteSpace(r.CategoryId)).ToList();
+        }
+
+        var pendingBoards = pendingRuns.Select(r => new { r.GameId, r.CategoryId, r.VariablesString }).Distinct().ToList();
 
         if (pendingBoards.Count == 0) return;
 
@@ -69,10 +82,12 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                     continue;
                 }
 
+                // NEW: IL CLEANUP - If the category is 404 Not Found, it was deleted by SRC mods or is an IL
                 if (varsResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
-                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1);
+                    var obsoleteRuns = pendingRuns.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToList();
+                    logger.LogWarning("🗑️ [IL CLEANUP] Borrando IL o categoría obsoleta: {count} runs para CatID: {catId}", obsoleteRuns.Count, board.CategoryId);
+                    db.Runs.RemoveRange(obsoleteRuns);
                     await db.SaveChangesAsync(stoppingToken);
                     continue;
                 }
@@ -120,10 +135,12 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                     continue;
                 }
 
+                // NEW: URL CLEANUP - If leaderboard is 404 Not Found, it was deleted or invalid
                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
-                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1);
+                    var obsoleteRuns = pendingRuns.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToList();
+                    logger.LogWarning("🗑️ https://cleanup.pictures/ Borrando runs con URL de tablero inválida (404).");
+                    db.Runs.RemoveRange(obsoleteRuns);
                     await db.SaveChangesAsync(stoppingToken);
                     continue;
                 }
@@ -136,12 +153,13 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 int totalRunners = runsArray.GetArrayLength();
 
                 // 4. Batch update and sync
-                var runsToUpdate = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
+                var runsToUpdate = pendingRuns.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToList();
 
                 foreach (var run in runsToUpdate)
                 {
                     run.TotalGlobalRunners = totalRunners > 0 ? totalRunners : -1;
                     run.VariablesString = cleanVariables;
+                    db.Runs.Update(run); // Explicitly mark entity as updated
                 }
 
                 await db.SaveChangesAsync(stoppingToken);
@@ -160,7 +178,10 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         }
 
         logger.LogInformation("✅ [PRESTIGE ENGINE] Completed. {count} leaderboards weighted.", updatedCount);
-        await notifier.SendSystemAlertAsync($"✅ **Prestige Engine Completed:** {updatedCount} leaderboards mathematically weighted.");
+        if (updatedCount > 0)
+        {
+            await notifier.SendSystemAlertAsync($"✅ **Prestige Engine Completed:** {updatedCount} leaderboards mathematically weighted.");
+        }
     }
 
     private async Task RunScanningCycleAsync(CancellationToken stoppingToken)
