@@ -15,7 +15,7 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
     {
         logger.LogInformation("🚀 SPEEDRUN BOT SERVICE STARTED (Intelligent Adaptive Mode)");
 
-        // NEW: Run the Prestige Engine Backfill to calculate competitive weights for new/missing runs.
+        // Run the Prestige Engine Backfill to calculate competitive weights for new/missing runs.
         await BackfillMissingLeaderboardSizesAsync(stoppingToken);
 
         using PeriodicTimer scanTimer = new(TimeSpan.FromMinutes(10));
@@ -28,14 +28,13 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         }
     }
 
-    // NEW: Directly targets unique leaderboards with TotalGlobalRunners == 0 and fetches their exact size.
+    // Directly targets unique leaderboards with TotalGlobalRunners == 0 and fetches their exact size.
     private async Task BackfillMissingLeaderboardSizesAsync(CancellationToken stoppingToken)
     {
         using var scope = serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
         var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
 
-        // Find all unique board combinations that lack prestige weighting
         var pendingBoards = await db.Runs
             .Where(r => r.TotalGlobalRunners == 0)
             .Select(r => new { r.GameId, r.CategoryId, r.VariablesString })
@@ -56,22 +55,60 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
             try
             {
-                // Construct specific API URL with subcategory fingerprint
-                string query = string.IsNullOrEmpty(board.VariablesString) ? "" : $"?{board.VariablesString}";
-                string url = $"leaderboards/{board.GameId}/category/{board.CategoryId}{query}";
+                // 1. Fetch category variables to identify WHICH ones are actual subcategories
+                var varsResponse = await httpClient.GetAsync($"categories/{board.CategoryId}/variables", stoppingToken);
 
-                var response = await httpClient.GetAsync(url, stoppingToken);
-
-                // Handle obsolete categories natively
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                if (varsResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
                     var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
-                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1); // Mark as ignored
+                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1);
                     await db.SaveChangesAsync(stoppingToken);
                     continue;
                 }
 
-                // Respect API restrictions
+                varsResponse.EnsureSuccessStatusCode();
+                var varsJson = await varsResponse.Content.ReadAsStringAsync(stoppingToken);
+                using var varsDoc = System.Text.Json.JsonDocument.Parse(varsJson);
+
+                var subcategoryIds = new HashSet<string>();
+                foreach (var v in varsDoc.RootElement.GetProperty("data").EnumerateArray())
+                {
+                    if (v.GetProperty("is-subcategory").GetBoolean())
+                    {
+                        subcategoryIds.Add(v.GetProperty("id").GetString()!);
+                    }
+                }
+
+                // 2. Clean the VariablesString to ONLY include real subcategories (removes platform, emulator, etc.)
+                string cleanVariables = "";
+                if (!string.IsNullOrEmpty(board.VariablesString))
+                {
+                    var validPairs = board.VariablesString.Split('&')
+                        .Where(pair =>
+                        {
+                            var parts = pair.Split('=');
+                            if (parts.Length != 2) return false;
+                            var varId = parts[0].Replace("var-", "");
+                            return subcategoryIds.Contains(varId);
+                        }).ToList();
+
+                    cleanVariables = string.Join("&", validPairs);
+                }
+
+                // 3. Construct clean API URL
+                string query = string.IsNullOrEmpty(cleanVariables) ? "" : $"?{cleanVariables}";
+                string url = $"leaderboards/{board.GameId}/category/{board.CategoryId}{query}";
+
+                var response = await httpClient.GetAsync(url, stoppingToken);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
+                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1);
+                    await db.SaveChangesAsync(stoppingToken);
+                    continue;
+                }
+
                 if ((int)response.StatusCode == 420 || (int)response.StatusCode == 429)
                 {
                     logger.LogWarning("API Rate limit hit during prestige backfill. Pausing for 60 seconds.");
@@ -86,18 +123,19 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 var runsArray = doc.RootElement.GetProperty("data").GetProperty("runs");
                 int totalRunners = runsArray.GetArrayLength();
 
-                // Batch update all CR runners in this specific leaderboard
+                // 4. Batch update and sync the cleaned variable string back to the DB
                 var runsToUpdate = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
 
                 foreach (var run in runsToUpdate)
                 {
                     run.TotalGlobalRunners = totalRunners > 0 ? totalRunners : -1;
+                    run.VariablesString = cleanVariables; // FIX: Sync DB so it matches the massive scan
                 }
 
                 await db.SaveChangesAsync(stoppingToken);
                 updatedCount++;
 
-                await Task.Delay(1500, stoppingToken); // Flat delay to protect SRC servers
+                await Task.Delay(1500, stoppingToken);
             }
             catch (Exception ex)
             {
@@ -121,7 +159,7 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
             using var scope = serviceProvider.CreateScope();
             var gameRepo = scope.ServiceProvider.GetRequiredService<IGameRepository>();
             var checker = scope.ServiceProvider.GetRequiredService<CheckForNewRecords>();
-            var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>(); // Alert Notifier
+            var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
 
             var gamesToScan = await gameRepo.GetTrackedGamesAsync();
             if (gamesToScan.Count == 0) return;
@@ -134,7 +172,6 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
             int chunkSize = 50;
 
-            // ADAPTIVE GEARBOX VARIABLES
             int maxConcurrentTasks = 5;
             int currentDelayMs = 2000;
             int successStreak = 0;
@@ -170,7 +207,6 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                                 await checker.ExecuteAsync("cr", new[] { gameId });
                                 await Task.Delay(currentDelayMs, stoppingToken);
 
-                                // SUCCESS: Increase streak
                                 bool notifyUpshift = false;
                                 lock (syncLock)
                                 {
@@ -200,7 +236,6 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                             }
                             catch (Exception ex)
                             {
-                                // API Rate Limit detection
                                 if (ex.Message.Contains("420") || ex.Message.Contains("429"))
                                 {
                                     attempts++;
@@ -242,7 +277,6 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                 await Task.WhenAll(tasks);
 
-                // Save progress and alert chunk completion
                 int nextIndex = i + chunkSize;
                 await File.WriteAllTextAsync(StateFile, nextIndex.ToString(), stoppingToken);
                 await notifier.SendSystemAlertAsync($"📦 **Chunk Completed:** [{currentEnd}/{gamesToScan.Count}] scanned.");

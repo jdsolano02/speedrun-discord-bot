@@ -35,30 +35,23 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // NEW LOGIC: Saves or Updates a PB using the RunLink as a unique identifier.
-    // This prevents duplicates when category names vary slightly between API endpoints.
+    // Saves or Updates a PB using the RunLink as a unique identifier.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
-        // 1. Search for an existing record by the unique RunLink
         var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)
         {
-            // 2. If it exists, we decide whether to update it or leave it.
-            // We prioritize the most detailed CategoryName (the longest string).
             if (run.CategoryName.Length >= existing.CategoryName.Length)
             {
-                // We remove the old one to ensure the new one (with potentially more data) is saved.
                 context.Runs.Remove(existing);
             }
             else
             {
-                // If the incoming record has a shorter (less detailed) name, we keep the existing one.
                 return;
             }
         }
 
-        // 3. Add the new/updated record.
         await context.Runs.AddAsync(run);
         await context.SaveChangesAsync();
     }
@@ -71,20 +64,16 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         if (!string.IsNullOrWhiteSpace(gameFullName))
             query = query.Where(r => r.GameFullName == gameFullName);
 
-        // NEW: Case-insensitive check to safely identify "ALL_CATEGORIES" regardless of user input
         bool isAllCategories = string.IsNullOrWhiteSpace(categoryName) ||
                                categoryName.Equals("ALL_CATEGORIES", StringComparison.OrdinalIgnoreCase);
 
         if (!isAllCategories)
         {
-            // Specific category filtering
             query = query.Where(r => r.CategoryName == categoryName);
             return await query.OrderBy(r => r.TimeInSeconds).ToListAsync();
         }
         else
         {
-            // NEW: If all categories, sort by CategoryName first, then by TimeInSeconds
-            // This is essential for the Discord Embed to visually group runs under their respective category headers
             return await query
                 .OrderBy(r => r.CategoryName)
                 .ThenBy(r => r.TimeInSeconds)
@@ -92,8 +81,24 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         }
     }
 
-    // NEW: Retrieves a list of recently active games based on the newest run submissions.
-    // Use this to power your /game recent command for accurate chronological ordering.
+    // UPDATED: Counts unique runners per game instead of total run records to fix /game most_played logic.
+    public async Task<List<(string GameName, int RunnerCount)>> GetMostPlayedGamesAsync(int limit = 20)
+    {
+        return await context.Runs
+            .GroupBy(r => r.GameFullName)
+            .Select(g => new
+            {
+                GameName = g.Key,
+                // Count unique runner IDs to show how many people play the game
+                RunnerCount = g.Select(r => r.RunnerId).Distinct().Count()
+            })
+            .OrderByDescending(x => x.RunnerCount)
+            .Take(limit)
+            .Select(x => ValueTuple.Create(x.GameName, x.RunnerCount))
+            .ToListAsync();
+    }
+
+    // UPDATED: Fixes /game recent to strictly use the official submission date from Speedrun.com.
     public async Task<List<string>> GetRecentlyActiveGamesAsync(int limit = 15)
     {
         return await context.Runs
@@ -102,10 +107,10 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
             .Select(g => new
             {
                 GameName = g.Key,
-                // Find the most recent submission date for any run in this game
-                LastActiveDate = g.Max(r => r.DateSubmitted)
+                // Get the absolute latest run date across all categories for this game
+                LatestRunDate = g.Max(r => r.DateSubmitted)
             })
-            .OrderByDescending(x => x.LastActiveDate)
+            .OrderByDescending(x => x.LatestRunDate)
             .Select(x => x.GameName)
             .Take(limit)
             .ToListAsync();
