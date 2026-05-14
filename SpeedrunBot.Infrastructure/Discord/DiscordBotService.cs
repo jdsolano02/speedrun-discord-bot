@@ -102,7 +102,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     .AddOption(new SlashCommandOptionBuilder().WithName("delete").WithDescription("Remove a game from watchlist (DataTakers).").WithType(ApplicationCommandOptionType.SubCommand)
                         .AddOption("id_src", ApplicationCommandOptionType.String, "Speedrun.com Abbreviation to delete", isRequired: true))
                     .AddOption(new SlashCommandOptionBuilder().WithName("list").WithDescription("Export full list of tracked games (.txt).").WithType(ApplicationCommandOptionType.SubCommand))
-                    .AddOption(new SlashCommandOptionBuilder().WithName("recent").WithDescription("Top 15 games with most recent CR runs.").WithType(ApplicationCommandOptionType.SubCommand))
+                    .AddOption(new SlashCommandOptionBuilder().WithName("recent").WithDescription("Top 25 games with most recent CR runs.").WithType(ApplicationCommandOptionType.SubCommand))
                     .AddOption(new SlashCommandOptionBuilder().WithName("most_played").WithDescription("Top games by number of CR runners.").WithType(ApplicationCommandOptionType.SubCommand));
 
                 var topCommand = new SlashCommandBuilder().WithName("top").WithDescription("Competitive leaderboards based on prestige.")
@@ -236,7 +236,8 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                         break;
 
                     case "recent":
-                        var recentGames = await repo.GetRecentlyActiveGamesAsync(15);
+                        // UPDATED: Removed explicit limit to allow the repository to use its default value (25)
+                        var recentGames = await repo.GetRecentlyActiveGamesAsync();
                         var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
                             .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
                         await command.FollowupAsync(embed: embedR.Build());
