@@ -35,24 +35,38 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // Saves or Updates a PB using the RunLink as a unique identifier.
+    // UPDATED: Saves or Updates a PB ensuring metadata (IDs) is never discarded.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
+        // 1. Search for an existing record by the unique RunLink
         var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)
         {
+            // 2. CRITICAL: Always update Metadata IDs and variables from the API
+            existing.CategoryId = run.CategoryId;
+            existing.VariablesString = run.VariablesString;
+
+            // NEW: If the existing record was marked as failed (-1), reset it to 0 for the Prestige Engine to catch it
+            if (existing.TotalGlobalRunners == -1)
+            {
+                existing.TotalGlobalRunners = 0;
+            }
+
+            // 3. Prioritize the most detailed CategoryName (the longest string) for display
             if (run.CategoryName.Length >= existing.CategoryName.Length)
             {
-                context.Runs.Remove(existing);
+                existing.CategoryName = run.CategoryName;
             }
-            else
-            {
-                return;
-            }
+
+            context.Runs.Update(existing);
+        }
+        else
+        {
+            // 4. Add the new record if it doesn't exist.
+            await context.Runs.AddAsync(run);
         }
 
-        await context.Runs.AddAsync(run);
         await context.SaveChangesAsync();
     }
 
