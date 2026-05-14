@@ -106,8 +106,8 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
             .ToListAsync();
     }
 
-    // Fixes /game recent to strictly use the official submission date from Speedrun.com.
-    public async Task<List<string>> GetRecentlyActiveGamesAsync(int limit = 15)
+    // UPDATED: Aumentamos el límite a 25 para evitar que juegos de la misma semana queden por fuera
+    public async Task<List<string>> GetRecentlyActiveGamesAsync(int limit = 25)
     {
         return await context.Runs
             .Where(r => r.DateSubmitted != null)
@@ -115,8 +115,10 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
             .Select(g => new
             {
                 GameName = g.Key,
+                // Agarra la fecha exacta en la que el moderador de Speedrun.com aprobó la run
                 LatestRunDate = g.Max(r => r.DateSubmitted)
             })
+            // Ordena desde lo que se aprobó HOY hacia atrás
             .OrderByDescending(x => x.LatestRunDate)
             .Select(x => x.GameName)
             .Take(limit)
