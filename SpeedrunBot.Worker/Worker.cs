@@ -28,29 +28,29 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         }
     }
 
-    // Directly targets unique leaderboards with TotalGlobalRunners == 0 and fetches their exact size.
+    // Directly targets unique leaderboards with TotalGlobalRunners <= 0 to catch fresh runs AND revive old failed ones.
     private async Task BackfillMissingLeaderboardSizesAsync(CancellationToken stoppingToken)
     {
         using var scope = serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
         var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
 
+        // CHANGED: From == 0 to <= 0. This forces the engine to recalculate all the -1s that survived the deduplication!
         var pendingBoards = await db.Runs
-            .Where(r => r.TotalGlobalRunners == 0)
+            .Where(r => r.TotalGlobalRunners <= 0)
             .Select(r => new { r.GameId, r.CategoryId, r.VariablesString })
             .Distinct()
             .ToListAsync(stoppingToken);
 
         if (pendingBoards.Count == 0) return;
 
-        logger.LogInformation("🔍 [PRESTIGE ENGINE] Found {count} unique leaderboards to backfill.", pendingBoards.Count);
-        await notifier.SendSystemAlertAsync($"🔍 **Prestige Engine:** Calculating competitive weights for {pendingBoards.Count} missing leaderboards...");
+        logger.LogInformation("🔍 [PRESTIGE ENGINE] Found {count} unique leaderboards to backfill (including revives).", pendingBoards.Count);
+        await notifier.SendSystemAlertAsync($"🔍 **Prestige Engine:** Calculating competitive weights for {pendingBoards.Count} leaderboards...");
 
         using var httpClient = new HttpClient { BaseAddress = new Uri("https://www.speedrun.com/api/v1/") };
 
         int updatedCount = 0;
 
-        // CHANGED: Using a 'for' loop so we can step back (i--) and retry if we hit a rate limit.
         for (int i = 0; i < pendingBoards.Count; i++)
         {
             var board = pendingBoards[i];
@@ -61,12 +61,11 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 // 1. Fetch category variables to identify WHICH ones are actual subcategories
                 var varsResponse = await httpClient.GetAsync($"categories/{board.CategoryId}/variables", stoppingToken);
 
-                // NEW: Intercept Rate Limits on the FIRST request to prevent exception spam
                 if ((int)varsResponse.StatusCode == 420 || (int)varsResponse.StatusCode == 429)
                 {
                     logger.LogWarning("⚠️ API Rate limit hit (Variables). Pausing for 60 seconds...");
                     await Task.Delay(60000, stoppingToken);
-                    i--; // Step back to retry this exact same board on the next iteration
+                    i--; // Step back to retry this exact same board
                     continue;
                 }
 
@@ -113,12 +112,11 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                 var response = await httpClient.GetAsync(url, stoppingToken);
 
-                // Intercept Rate Limits on the SECOND request
                 if ((int)response.StatusCode == 420 || (int)response.StatusCode == 429)
                 {
                     logger.LogWarning("⚠️ API Rate limit hit (Leaderboard). Pausing for 60 seconds...");
                     await Task.Delay(60000, stoppingToken);
-                    i--; // Step back to retry this exact same board on the next iteration
+                    i--; // Step back to retry
                     continue;
                 }
 
@@ -312,7 +310,6 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         }
         catch (OperationCanceledException)
         {
-            // Expected during application restart/shutdown
             logger.LogInformation("🛑 Scan cycle gracefully cancelled due to app shutdown.");
         }
         catch (Exception ex)
