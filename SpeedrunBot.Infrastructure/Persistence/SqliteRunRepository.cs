@@ -35,42 +35,41 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // UPDATED: Saves or Updates a PB using replacement logic to bypass 'init' property restrictions.
+    // UPDATED: Safely updates existing records using EF Core tracking to bypass 'init' property limitations.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
         var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)
         {
-            // If the new record has a better (longer) name, we replace the whole entity
-            if (run.CategoryName.Length > existing.CategoryName.Length)
+            // 1. Force update the metadata IDs to ensure the Prestige Engine has the right endpoints.
+            // Using CurrentValue bypasses C# 'init' access modifiers safely.
+            context.Entry(existing).Property(e => e.CategoryId).CurrentValue = run.CategoryId;
+            context.Entry(existing).Property(e => e.VariablesString).CurrentValue = run.VariablesString;
+
+            // 2. Update the visual category name only if the new one is more descriptive.
+            if (run.CategoryName.Length >= existing.CategoryName.Length)
             {
-                context.Runs.Remove(existing);
-                await context.Runs.AddAsync(run);
+                context.Entry(existing).Property(e => e.CategoryName).CurrentValue = run.CategoryName;
             }
-            else
+
+            // 3. Only reset the TotalGlobalRunners to 0 if it was marked as failed (-1).
+            // This preserves the hard work the Prestige Engine already did on the 236 successful runs.
+            if (existing.TotalGlobalRunners == -1)
             {
-                // If we keep the old one, we still MUST update its metadata and reset weight
-                existing.CategoryId = run.CategoryId;
-                existing.VariablesString = run.VariablesString;
-
-                if (existing.TotalGlobalRunners == -1)
-                {
-                    existing.TotalGlobalRunners = 0;
-                }
-
-                context.Runs.Update(existing);
+                context.Entry(existing).Property(e => e.TotalGlobalRunners).CurrentValue = 0;
             }
         }
         else
         {
+            // Add completely new runs.
             await context.Runs.AddAsync(run);
         }
 
         await context.SaveChangesAsync();
     }
 
-    // Returns the leaderboard for a game/category.
+    // Returns the leaderboard for a game/category. If filters are empty, returns all records.
     public async Task<List<RunRecord>> GetRankingAsync(string gameFullName, string categoryName)
     {
         var query = context.Runs.AsQueryable();
@@ -95,7 +94,7 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         }
     }
 
-    // Counts unique runners per game for /game most_played.
+    // Counts unique runners per game instead of total run records to fix /game most_played logic.
     public async Task<List<(string GameName, int RunnerCount)>> GetMostPlayedGamesAsync(int limit = 20)
     {
         return await context.Runs
@@ -111,7 +110,7 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
             .ToListAsync();
     }
 
-    // Fixes /game recent using official submission dates.
+    // Fixes /game recent to strictly use the official submission date from Speedrun.com.
     public async Task<List<string>> GetRecentlyActiveGamesAsync(int limit = 15)
     {
         return await context.Runs
