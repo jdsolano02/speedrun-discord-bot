@@ -15,7 +15,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddHttpClient<ISpeedrunApi, SpeedrunApiClient>(client =>
 {
     client.BaseAddress = new Uri("https://www.speedrun.com/api/v1/");
-    // NEW: Increased timeout from 15 to 30 seconds to prevent cancellations on heavy leaderboards
+    // Increased timeout from 15 to 30 seconds to prevent cancellations on heavy leaderboards
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
@@ -72,7 +72,6 @@ using (var scope = host.Services.CreateScope())
     // --- SCHEMA PATCH: INJECT NEW COLUMNS WITHOUT LOSING DATA ---
     try
     {
-        // Safely add DateSubmitted column to Runs table (SQLite stores dates as TEXT)
         db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN DateSubmitted TEXT;");
         logger.LogInformation("✨ [Schema Update] 'DateSubmitted' column added to Runs.");
     }
@@ -80,13 +79,11 @@ using (var scope = host.Services.CreateScope())
 
     try
     {
-        // Safely add NrPingRoleId column to GuildConfigs table (ulong stored as INTEGER)
         db.Database.ExecuteSqlRaw("ALTER TABLE GuildConfigs ADD COLUMN NrPingRoleId INTEGER NOT NULL DEFAULT 0;");
         logger.LogInformation("✨ [Schema Update] 'NrPingRoleId' column added to GuildConfigs.");
     }
     catch { /* Column already exists, safe to ignore */ }
 
-    // Safely add TotalGlobalRunners for competitive weight calculations
     try
     {
         db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN TotalGlobalRunners INTEGER NOT NULL DEFAULT 0;");
@@ -94,9 +91,22 @@ using (var scope = host.Services.CreateScope())
     }
     catch { /* Column already exists, safe to ignore */ }
 
+    try
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN VariablesString TEXT NOT NULL DEFAULT '';");
+        logger.LogInformation("✨ [Schema Update] 'VariablesString' column added to Runs.");
+    }
+    catch { /* Column already exists, safe to ignore */ }
+
+    // NEW: Safely add CategoryId to track leaderboard endpoints
+    try
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Runs ADD COLUMN CategoryId TEXT NOT NULL DEFAULT '';");
+        logger.LogInformation("✨ [Schema Update] 'CategoryId' column added to Runs.");
+    }
+    catch { /* Column already exists, safe to ignore */ }
+
     // --- DATABASE CLEANUP: DEDUPLICATION ---
-    // Removes duplicate runs keeping the one with the most detailed Category Name 
-    // based on RunnerId and exact RunLink match.
     try
     {
         string dedupeSql = @"

@@ -362,8 +362,18 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var sb = new StringBuilder().AppendLine("🏆 RÉCORDS NACIONALES OFICIALES 🏆\n");
                 foreach (var nr in nrs) sb.AppendLine($"- {nr.GameFullName} ({nr.CategoryName}): {nr.RunnerName} [{FormatTime(nr.TimeInSeconds)}]");
 
-                string ticks = new string('`', 3);
-                await command.FollowupAsync($"{ticks}text\n{sb}{ticks}");
+                string content = sb.ToString();
+
+                if (content.Length > 1950)
+                {
+                    using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+                    await command.FollowupWithFileAsync(stream, "nrs_costa_rica.txt", "🏆 **Récords Nacionales Oficiales**\n*(La lista es muy larga para mostrarla en el chat, aquí tienes el documento completo).*");
+                }
+                else
+                {
+                    string ticks = new string('`', 3);
+                    await command.FollowupAsync($"{ticks}text\n{content}{ticks}");
+                }
             }
             else if (command.CommandName == "top")
             {

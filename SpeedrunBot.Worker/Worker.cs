@@ -1,5 +1,7 @@
 ﻿using SpeedrunBot.Application.Interfaces;
 using SpeedrunBot.Application.UseCases;
+using SpeedrunBot.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
 
 namespace SpeedrunBot.Worker;
@@ -13,6 +15,9 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
     {
         logger.LogInformation("🚀 SPEEDRUN BOT SERVICE STARTED (Intelligent Adaptive Mode)");
 
+        // NEW: Run the Prestige Engine Backfill to calculate competitive weights for new/missing runs.
+        await BackfillMissingLeaderboardSizesAsync(stoppingToken);
+
         using PeriodicTimer scanTimer = new(TimeSpan.FromMinutes(10));
 
         await RunScanningCycleAsync(stoppingToken);
@@ -21,6 +26,87 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         {
             await RunScanningCycleAsync(stoppingToken);
         }
+    }
+
+    // NEW: Directly targets unique leaderboards with TotalGlobalRunners == 0 and fetches their exact size.
+    private async Task BackfillMissingLeaderboardSizesAsync(CancellationToken stoppingToken)
+    {
+        using var scope = serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
+        var notifier = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
+
+        // Find all unique board combinations that lack prestige weighting
+        var pendingBoards = await db.Runs
+            .Where(r => r.TotalGlobalRunners == 0)
+            .Select(r => new { r.GameId, r.CategoryId, r.VariablesString })
+            .Distinct()
+            .ToListAsync(stoppingToken);
+
+        if (pendingBoards.Count == 0) return;
+
+        logger.LogInformation("🔍 [PRESTIGE ENGINE] Found {count} unique leaderboards to backfill.", pendingBoards.Count);
+        await notifier.SendSystemAlertAsync($"🔍 **Prestige Engine:** Calculating competitive weights for {pendingBoards.Count} missing leaderboards...");
+
+        using var httpClient = new HttpClient { BaseAddress = new Uri("https://www.speedrun.com/api/v1/") };
+
+        int updatedCount = 0;
+        foreach (var board in pendingBoards)
+        {
+            if (stoppingToken.IsCancellationRequested) break;
+
+            try
+            {
+                // Construct specific API URL with subcategory fingerprint
+                string query = string.IsNullOrEmpty(board.VariablesString) ? "" : $"?{board.VariablesString}";
+                string url = $"leaderboards/{board.GameId}/category/{board.CategoryId}{query}";
+
+                var response = await httpClient.GetAsync(url, stoppingToken);
+
+                // Handle obsolete categories natively
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
+                    obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1); // Mark as ignored
+                    await db.SaveChangesAsync(stoppingToken);
+                    continue;
+                }
+
+                // Respect API restrictions
+                if ((int)response.StatusCode == 420 || (int)response.StatusCode == 429)
+                {
+                    logger.LogWarning("API Rate limit hit during prestige backfill. Pausing for 60 seconds.");
+                    await Task.Delay(60000, stoppingToken);
+                    continue;
+                }
+
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync(stoppingToken);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+
+                var runsArray = doc.RootElement.GetProperty("data").GetProperty("runs");
+                int totalRunners = runsArray.GetArrayLength();
+
+                // Batch update all CR runners in this specific leaderboard
+                var runsToUpdate = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
+
+                foreach (var run in runsToUpdate)
+                {
+                    run.TotalGlobalRunners = totalRunners > 0 ? totalRunners : -1;
+                }
+
+                await db.SaveChangesAsync(stoppingToken);
+                updatedCount++;
+
+                await Task.Delay(1500, stoppingToken); // Flat delay to protect SRC servers
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("⚠️ Failed to backfill leaderboard {gameId}: {message}", board.GameId, ex.Message);
+            }
+        }
+
+        logger.LogInformation("✅ [PRESTIGE ENGINE] Completed. {count} leaderboards weighted.", updatedCount);
+        await notifier.SendSystemAlertAsync($"✅ **Prestige Engine Completed:** {updatedCount} leaderboards mathematically weighted.");
     }
 
     private async Task RunScanningCycleAsync(CancellationToken stoppingToken)

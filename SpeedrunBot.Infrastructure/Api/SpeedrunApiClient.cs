@@ -112,20 +112,28 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
             var gameInfo = item.Game.Data;
             var catInfo = item.Category.Data;
 
+            string varString = item.Run.Values != null && item.Run.Values.Any()
+                ? string.Join("&", item.Run.Values.Select(kvp => $"var-{kvp.Key}={kvp.Value}"))
+                : "";
+
             runs.Add(new RunRecord
             {
                 RunnerId = userId,
                 RunnerName = userName,
                 GameId = gameInfo.Id,
                 GameFullName = gameInfo.Names.International,
+
+                // NEW: Mapped the Category ID to store it in the database
+                CategoryId = catInfo.Id,
+
                 CategoryName = catInfo.Name,
                 TimeInSeconds = item.Run.Times.PrimaryT,
                 RunLink = item.Run.Weblink,
                 GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
                 WorldRank = item.Place,
                 DateSubmitted = item.Run.Submitted ?? item.Run.Date,
-                // Default to 0 when registering via Discord. It will be updated correctly during the massive scan worker cycle.
-                TotalGlobalRunners = 0
+                TotalGlobalRunners = 0,
+                VariablesString = varString
             });
         }
 
@@ -166,14 +174,18 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
                     RunnerName = crPlayers[pLink.Id!],
                     GameId = gameInfo.Id,
                     GameFullName = gameInfo.Names.International,
+
+                    // NEW: Mapped the Category ID during global massive scans
+                    CategoryId = catId,
+
                     CategoryName = fullCategoryName,
                     TimeInSeconds = runItem.Run.Times.PrimaryT,
                     RunLink = runItem.Run.Weblink,
                     GameThumbnail = gameInfo.Assets.CoverLarge.Uri,
                     WorldRank = runItem.Place,
                     DateSubmitted = runItem.Run.Submitted ?? runItem.Run.Date,
-                    //Inject the total count into the database model
-                    TotalGlobalRunners = totalRunnersInLeaderboard
+                    TotalGlobalRunners = totalRunnersInLeaderboard,
+                    VariablesString = queryParams ?? ""
                 });
             }
         }
@@ -216,7 +228,7 @@ public class SpeedrunApiClient(HttpClient httpClient) : ISpeedrunApi
     public record VariableValueItemDto(string Label);
     public record LeaderboardDto(List<RunItemDto> Runs, PlayersDto Players);
     public record RunItemDto(int Place, RunDto Run);
-    public record RunDto(TimesDto Times, string Weblink, List<PlayerLinkDto> Players, string? Level, DateTime? Date, DateTime? Submitted);
+    public record RunDto(TimesDto Times, string Weblink, List<PlayerLinkDto> Players, string? Level, DateTime? Date, DateTime? Submitted, [property: JsonPropertyName("values")] Dictionary<string, string>? Values);
     public record TimesDto([property: JsonPropertyName("primary_t")] double PrimaryT);
     public record PlayerLinkDto(string? Id);
     public record PlayersDto([property: JsonPropertyName("data")] List<PlayerDetailDto> Data);
