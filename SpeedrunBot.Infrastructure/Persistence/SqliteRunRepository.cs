@@ -35,34 +35,30 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // UPDATED: Safely updates existing records using EF Core tracking to bypass 'init' property limitations.
+    // UPDATED: Saves or Updates a PB avoiding Discord spam and CS8852 compiler errors.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
         var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)
         {
-            // 1. Force update the metadata IDs to ensure the Prestige Engine has the right endpoints.
-            // Using CurrentValue bypasses C# 'init' access modifiers safely.
-            context.Entry(existing).Property(e => e.CategoryId).CurrentValue = run.CategoryId;
-            context.Entry(existing).Property(e => e.VariablesString).CurrentValue = run.VariablesString;
+            // 1. Update the metadata safely (These properties have 'set' accessors)
+            existing.CategoryId = run.CategoryId;
+            existing.VariablesString = run.VariablesString;
 
-            // 2. Update the visual category name only if the new one is more descriptive.
-            if (run.CategoryName.Length >= existing.CategoryName.Length)
-            {
-                context.Entry(existing).Property(e => e.CategoryName).CurrentValue = run.CategoryName;
-            }
-
-            // 3. Only reset the TotalGlobalRunners to 0 if it was marked as failed (-1).
-            // This preserves the hard work the Prestige Engine already did on the 236 successful runs.
+            // 2. Revive the run for the Prestige Engine
             if (existing.TotalGlobalRunners == -1)
             {
-                context.Entry(existing).Property(e => e.TotalGlobalRunners).CurrentValue = 0;
+                existing.TotalGlobalRunners = 0;
             }
+
+            // Note: We skip updating CategoryName because it is 'init-only'. Attempting to recreate
+            // the entity to change the name would trigger false "New Record" alerts in Discord.
+
+            context.Runs.Update(existing);
         }
         else
         {
-            // Add completely new runs.
             await context.Runs.AddAsync(run);
         }
 
