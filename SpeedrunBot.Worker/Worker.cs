@@ -49,14 +49,26 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
         using var httpClient = new HttpClient { BaseAddress = new Uri("https://www.speedrun.com/api/v1/") };
 
         int updatedCount = 0;
-        foreach (var board in pendingBoards)
+
+        // CHANGED: Using a 'for' loop so we can step back (i--) and retry if we hit a rate limit.
+        for (int i = 0; i < pendingBoards.Count; i++)
         {
+            var board = pendingBoards[i];
             if (stoppingToken.IsCancellationRequested) break;
 
             try
             {
                 // 1. Fetch category variables to identify WHICH ones are actual subcategories
                 var varsResponse = await httpClient.GetAsync($"categories/{board.CategoryId}/variables", stoppingToken);
+
+                // NEW: Intercept Rate Limits on the FIRST request to prevent exception spam
+                if ((int)varsResponse.StatusCode == 420 || (int)varsResponse.StatusCode == 429)
+                {
+                    logger.LogWarning("⚠️ API Rate limit hit (Variables). Pausing for 60 seconds...");
+                    await Task.Delay(60000, stoppingToken);
+                    i--; // Step back to retry this exact same board on the next iteration
+                    continue;
+                }
 
                 if (varsResponse.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
@@ -79,7 +91,7 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                     }
                 }
 
-                // 2. Clean the VariablesString to ONLY include real subcategories (removes platform, emulator, etc.)
+                // 2. Clean the VariablesString to ONLY include real subcategories
                 string cleanVariables = "";
                 if (!string.IsNullOrEmpty(board.VariablesString))
                 {
@@ -101,18 +113,20 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                 var response = await httpClient.GetAsync(url, stoppingToken);
 
+                // Intercept Rate Limits on the SECOND request
+                if ((int)response.StatusCode == 420 || (int)response.StatusCode == 429)
+                {
+                    logger.LogWarning("⚠️ API Rate limit hit (Leaderboard). Pausing for 60 seconds...");
+                    await Task.Delay(60000, stoppingToken);
+                    i--; // Step back to retry this exact same board on the next iteration
+                    continue;
+                }
+
                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
                     var obsoleteRuns = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
                     obsoleteRuns.ForEach(r => r.TotalGlobalRunners = -1);
                     await db.SaveChangesAsync(stoppingToken);
-                    continue;
-                }
-
-                if ((int)response.StatusCode == 420 || (int)response.StatusCode == 429)
-                {
-                    logger.LogWarning("API Rate limit hit during prestige backfill. Pausing for 60 seconds.");
-                    await Task.Delay(60000, stoppingToken);
                     continue;
                 }
 
@@ -123,19 +137,23 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 var runsArray = doc.RootElement.GetProperty("data").GetProperty("runs");
                 int totalRunners = runsArray.GetArrayLength();
 
-                // 4. Batch update and sync the cleaned variable string back to the DB
+                // 4. Batch update and sync
                 var runsToUpdate = await db.Runs.Where(r => r.GameId == board.GameId && r.CategoryId == board.CategoryId && r.VariablesString == board.VariablesString).ToListAsync(stoppingToken);
 
                 foreach (var run in runsToUpdate)
                 {
                     run.TotalGlobalRunners = totalRunners > 0 ? totalRunners : -1;
-                    run.VariablesString = cleanVariables; // FIX: Sync DB so it matches the massive scan
+                    run.VariablesString = cleanVariables;
                 }
 
                 await db.SaveChangesAsync(stoppingToken);
                 updatedCount++;
 
                 await Task.Delay(1500, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break; // Graceful shutdown
             }
             catch (Exception ex)
             {
@@ -230,7 +248,7 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
 
                                 isProcessed = true;
                             }
-                            catch (TaskCanceledException)
+                            catch (OperationCanceledException)
                             {
                                 break;
                             }
@@ -291,6 +309,11 @@ public class Worker(IServiceProvider serviceProvider, ILogger<Worker> logger) : 
                 logger.LogInformation("✅ Cycle completed 100%.");
                 await notifier.SendSystemAlertAsync($"🏁 **Scan Cycle 100% Completed.** Time: {stopwatch.Elapsed.ToString(@"hh\:mm\:ss")}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during application restart/shutdown
+            logger.LogInformation("🛑 Scan cycle gracefully cancelled due to app shutdown.");
         }
         catch (Exception ex)
         {
