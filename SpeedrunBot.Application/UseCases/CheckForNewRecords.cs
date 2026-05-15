@@ -16,6 +16,14 @@ public class CheckForNewRecords(
 
         foreach (var run in latestRuns)
         {
+            // NEW: BULLETPROOF SHIELD - Check if we already notified about this exact run link.
+            // If the link is already in our DB, skip it completely to avoid spam loops.
+            var gameRuns = await repository.GetRankingAsync(run.GameFullName, "ALL_CATEGORIES");
+            if (gameRuns.Any(r => r.RunLink == run.RunLink))
+            {
+                continue;
+            }
+
             // Check current local data to compare times
             var previousPb = await repository.GetPersonalBestAsync(run.RunnerId, run.GameFullName, run.CategoryName);
             var currentNr = await repository.GetCountryBestAsync(run.GameFullName, run.CategoryName);

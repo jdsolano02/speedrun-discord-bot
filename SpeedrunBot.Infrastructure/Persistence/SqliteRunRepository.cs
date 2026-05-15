@@ -10,8 +10,11 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
     // Fetches the best time for a specific runner in a specific game and category.
     public async Task<RunRecord?> GetPersonalBestAsync(string runnerId, string gameFullName, string categoryName)
     {
-        return await context.Runs.FirstOrDefaultAsync(r =>
-            r.RunnerId == runnerId && r.GameFullName == gameFullName && r.CategoryName == categoryName);
+        // UPDATED: Ensure we always fetch the absolute fastest time for accurate PB comparisons.
+        return await context.Runs
+            .Where(r => r.RunnerId == runnerId && r.GameFullName == gameFullName && r.CategoryName == categoryName)
+            .OrderBy(r => r.TimeInSeconds)
+            .FirstOrDefaultAsync();
     }
 
     // Retrieves the best time in the country for a given category.
@@ -59,6 +62,17 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         }
         else
         {
+            // NEW: Delete old slower PBs for this runner in this exact category to prevent ghost records.
+            var oldPbs = await context.Runs.Where(r =>
+                r.RunnerId == run.RunnerId &&
+                r.GameFullName == run.GameFullName &&
+                r.CategoryName == run.CategoryName).ToListAsync();
+
+            if (oldPbs.Any())
+            {
+                context.Runs.RemoveRange(oldPbs);
+            }
+
             await context.Runs.AddAsync(run);
         }
 
