@@ -7,6 +7,10 @@ namespace SpeedrunBot.Infrastructure.Persistence;
 // SQLite implementation for storing and retrieving speedrun records.
 public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
 {
+    // NEW: Blacklist to filter out joke/meme categories that skew the prestige rankings.
+    // Add any future annoying categories or games to this array.
+    private readonly string[] _bannedKeywords = { "Meme Categories", "Break Dirt", "Meme" };
+
     // Fetches the best time for a specific runner in a specific game and category.
     public async Task<RunRecord?> GetPersonalBestAsync(string runnerId, string gameFullName, string categoryName)
     {
@@ -38,9 +42,29 @@ public class SqliteRunRepository(SpeedrunContext context) : IRunRepository
         return index >= 0 ? index + 1 : 1;
     }
 
-    // UPDATED: Saves or Updates a PB avoiding Discord spam and CS8852 compiler errors.
+    // UPDATED: Saves or Updates a PB avoiding Discord spam, ghost records, and meme categories.
     public async Task SavePersonalBestAsync(RunRecord run)
     {
+        // NEW: Anti-Meme Filter. If the category or game contains a banned keyword, discard it completely.
+        if (_bannedKeywords.Any(keyword =>
+            run.CategoryName.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+            run.GameFullName.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+        {
+            // If it somehow already exists in the DB, we purge it to clean the rankings.
+            var unwantedPbs = await context.Runs.Where(r =>
+                r.RunnerId == run.RunnerId &&
+                r.GameFullName == run.GameFullName &&
+                r.CategoryName == run.CategoryName).ToListAsync();
+
+            if (unwantedPbs.Any())
+            {
+                context.Runs.RemoveRange(unwantedPbs);
+                await context.SaveChangesAsync();
+            }
+
+            return; // Silently reject and do not process this run any further
+        }
+
         var existing = await context.Runs.FirstOrDefaultAsync(r => r.RunLink == run.RunLink);
 
         if (existing != null)

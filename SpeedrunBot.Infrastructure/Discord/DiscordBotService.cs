@@ -236,7 +236,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                         break;
 
                     case "recent":
-                        // UPDATED: Removed explicit limit to allow the repository to use its default value (25)
                         var recentGames = await repo.GetRecentlyActiveGamesAsync();
                         var embedR = new EmbedBuilder().WithTitle("🕒 Juegos con Actividad Reciente").WithColor(Color.Green)
                             .WithDescription(recentGames.Any() ? string.Join("\n", recentGames.Select((g, i) => $"{i + 1}. **{g}**")) : "No hay datos de fechas aún.");
@@ -452,27 +451,43 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             else if (command.CommandName == "player")
             {
                 if (command.ChannelId != gConfig.RankingsChannelId) { await command.FollowupAsync($"❌ Usa <#{gConfig.RankingsChannelId}>."); return; }
+
                 var user = command.Data.Options.First().Value.ToString()!;
                 var all = await repo.GetRankingAsync("", "");
                 var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
 
-                double totalPrestigeScore = 0;
-                foreach (var r in pRuns)
-                {
-                    if (r.TotalGlobalRunners > 0 && r.WorldRank > 0)
-                    {
-                        double weight = (double)r.WorldRank / r.TotalGlobalRunners;
-                        double points = (1.0 - weight) * 100.0;
-                        if (points > 0) totalPrestigeScore += points;
-                    }
-                }
+                // NEW: Logic to calculate global player rankings based on Total Prestige
+                var allPlayersPrestige = all
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .GroupBy(r => r.RunnerName)
+                    .Select(g => new {
+                        RunnerName = g.Key,
+                        TotalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0)
+                    })
+                    .OrderByDescending(x => x.TotalPrestige)
+                    .ToList();
+
+                var targetPlayer = allPlayersPrestige.FirstOrDefault(p => p.RunnerName.Equals(pRuns[0].RunnerName, StringComparison.OrdinalIgnoreCase));
+                double totalPrestigeScore = targetPlayer?.TotalPrestige ?? 0;
+                int playerNationalRank = targetPlayer != null ? allPlayersPrestige.IndexOf(targetPlayer) + 1 : 0;
+                string playerRankText = playerNationalRank > 0 ? $"\n🎖️ **Runner top `#{playerNationalRank}` del país**" : "";
 
                 var profileUrl = $"https://www.speedrun.com/users/{pRuns[0].RunnerName.Replace(" ", "_")}";
                 var embed = new EmbedBuilder()
                     .WithTitle($"👤 Perfil: {pRuns[0].RunnerName}").WithUrl(profileUrl)
-                    .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`")
+                    .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`{playerRankText}")
                     .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
+
+                // NEW: Logic to calculate all runs prestige across the country for individual run ranking
+                var allRunsRanked = all
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .Select(r => new {
+                        RunLink = r.RunLink,
+                        Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
+                    })
+                    .OrderByDescending(x => x.Prestige)
+                    .ToList();
 
                 foreach (var run in pRuns.Take(15))
                 {
@@ -484,7 +499,12 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     {
                         double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
                         double runPrestige = (1.0 - runWeight) * 100.0;
-                        weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%)";
+
+                        // Find where this specific run stands compared to every other run in the country
+                        int runCountryRank = allRunsRanked.FindIndex(x => x.RunLink == run.RunLink) + 1;
+                        string runCountryRankText = runCountryRank > 0 ? $"\n🏅 Run top `#{runCountryRank}` del país" : "";
+
+                        weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%){runCountryRankText}";
                     }
 
                     embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank CR: #{natRank} | 🌍 Global: #{run.WorldRank} de {run.TotalGlobalRunners}{weightDisplay}");
@@ -493,7 +513,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             }
             else if (command.CommandName == "players")
             {
-                // NEW: Logic for filtering by specific game and implementing safe Discord limits handling
                 var mode = command.Data.Options.FirstOrDefault(x => x.Name == "lista")?.Value?.ToString();
                 var juegoFilter = command.Data.Options.FirstOrDefault(x => x.Name == "juego")?.Value?.ToString();
 
@@ -532,7 +551,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     description = $"Actualmente hay **{targetRunners.Count}** runners registrados y **{targetRunners.Count(n => !synced.Contains(n))}** pendientes.";
                 }
 
-                // If string exceeds Embed Description Limit (4096 characters), send as plain text file to prevent crash
                 if (description.Length > 4000)
                 {
                     using var stream = new MemoryStream(Encoding.UTF8.GetBytes(description));
@@ -656,7 +674,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         await UpdateAllGuildPlayerCounts();
     }
 
-    // System Alert implementation
     public async Task SendSystemAlertAsync(string message)
     {
         if (_adminChannelId == 0) return;
@@ -667,7 +684,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
         }
     }
 
-    // Accurate Millisecond Formatting (00:00:00.000)
     private string FormatTime(double s)
     {
         TimeSpan t = TimeSpan.FromSeconds(s);
