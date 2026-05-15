@@ -15,23 +15,13 @@ Built following **Clean Architecture** and **SOLID** principles to ensure mainta
 * **Infrastructure:** Implementation of data persistence (EF Core + SQLite), Speedrun.com API integration, and Discord command engine.
 * **Worker:** A background service executing an asynchronous scanning loop with **Intelligent Adaptive Throttling** to respect API rate limits, alongside the **Prestige Engine** for background metric calculations.
 
-## ✨ Key Features
+
 * **Prestige Engine & Competitive Weighting:** Mathematically calculates the prestige of every run based on global percentiles (`1.0 - (WorldRank / TotalGlobalRunners)`) to generate highly accurate "Top Player" and "Top Run" leaderboards.
 * **Self-Healing Database (Integrity Scanner):** Automatically detects and purges corrupted data, deleted leaderboards (404s), and Individual Levels (ILs) to maintain a pure "Full Game" database.
 * **Bulletproof Anti-Spam Shield:** Advanced tracking logic that ensures Discord notifications are only triggered for genuinely new and improved times, preventing duplicate link loops.
 * **Adaptive Scanning:** Intelligent "gearbox" logic that dynamically adjusts scan speeds (threads and delays) based on API response health and success streaks.
 * **Multi-Guild Support:** Server-agnostic configuration allows each Discord server to set its own announcement channels and "Data Helper" roles via `/setup`.
 * **Advanced Command Suite:** Modern UI/UX with Slash Commands, smart autocomplete, and detailed stats tracking (e.g., `/game most_played`, `/game recent`, `/top players`).
-
-## 🚀 Deployment
-The project is containerized for easy deployment on Linux VPS or cloud platforms like Railway.
-
-```bash
-# Build the image
-docker build -t speedrun-bot .
-
-# Run with persistent volume for data
-docker run -d --name speedrun-bot -v ./data:/app/data speedrun-bot
 
 ## 👨‍💻 Developer & Support
 Developed by Jose Solano (realxones / jdsolano02).
@@ -43,3 +33,13 @@ Socials: https://linktr.ee/xones
 GitHub: https://github.com/jdsolano02
 
 Pura vida speedrunning! 🇨🇷
+
+## 🚀 Deployment
+The project is containerized for easy deployment on Linux VPS or cloud platforms like Railway.
+
+```bash
+# Build the image
+docker build -t speedrun-bot .
+
+# Run with persistent volume for data
+docker run -d --name speedrun-bot -v ./data:/app/data speedrun-bot
