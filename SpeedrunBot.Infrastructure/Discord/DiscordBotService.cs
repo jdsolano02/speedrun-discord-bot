@@ -58,6 +58,26 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             {
                 await Task.Delay(3000);
 
+                // NEW: 🧹 AUTO-CLEAN BANNED RUNS ON STARTUP
+                // This forcefully scrubs the DB of ghost/meme runs that are no longer returned by the API during /register
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
+                    var bannedWords = new[] { "Meme", "Break Dirt" };
+
+                    var allRuns = db.Runs.ToList(); // Load into memory to avoid SQLite translation limitations
+                    var runsToKill = allRuns.Where(r => bannedWords.Any(b =>
+                        r.CategoryName.Contains(b, StringComparison.OrdinalIgnoreCase) ||
+                        r.GameFullName.Contains(b, StringComparison.OrdinalIgnoreCase))).ToList();
+
+                    if (runsToKill.Any())
+                    {
+                        db.Runs.RemoveRange(runsToKill);
+                        await db.SaveChangesAsync();
+                        Console.WriteLine($"🗑️ [MEME-CLEANER] Purged {runsToKill.Count} banned runs from database on startup.");
+                    }
+                }
+
                 var setupCommand = new SlashCommandBuilder().WithName("setup").WithDescription("Configure bot channels and roles for this server.")
                     .AddOption("new_records_announcement", ApplicationCommandOptionType.Channel, "Channel for record notifications.", isRequired: true)
                     .AddOption("rankings", ApplicationCommandOptionType.Channel, "Channel for ranking and player commands.", isRequired: true)
@@ -91,7 +111,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var playerCommand = new SlashCommandBuilder().WithName("player").WithDescription("View a runner's profile.")
                     .AddOption("usuario", ApplicationCommandOptionType.String, "Runner name", isRequired: true, isAutocomplete: true);
 
-                // NEW: Added the optional "juego" parameter to the players command
+                // Added the optional "juego" parameter to the players command
                 var playersCommand = new SlashCommandBuilder().WithName("players").WithDescription("Show registered runners list.")
                     .AddOption(new SlashCommandOptionBuilder().WithName("lista").WithDescription("Select the list view mode.").WithType(ApplicationCommandOptionType.String).AddChoice("Full List", "all").AddChoice("Unsynced Runners", "unsynced"))
                     .AddOption("juego", ApplicationCommandOptionType.String, "Filter by specific game", isRequired: false, isAutocomplete: true);
@@ -457,7 +477,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
                 if (!pRuns.Any()) { await command.FollowupAsync("Corredor no encontrado."); return; }
 
-                // NEW: Logic to calculate global player rankings based on Total Prestige
+                // Logic to calculate global player rankings based on Total Prestige
                 var allPlayersPrestige = all
                     .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
                     .GroupBy(r => r.RunnerName)
@@ -479,7 +499,7 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                     .WithDescription($"[🔗 Ver perfil en Speedrun.com]({profileUrl})\n\n🎮 Total de Runs: **{pRuns.Count}**\n✨ **Prestigio Total:** `{totalPrestigeScore:F0} pts`{playerRankText}")
                     .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
 
-                // NEW: Logic to calculate all runs prestige across the country for individual run ranking
+                // Logic to calculate all runs prestige across the country for individual run ranking
                 var allRunsRanked = all
                     .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
                     .Select(r => new {
