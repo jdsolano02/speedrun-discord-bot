@@ -15,13 +15,13 @@ public static class PlayerCommands
 
             if (subCommand.Name == "runs")
             {
-                // UPDATED: Only Main Boards count towards Top Runs
                 var validRuns = allRuns
                     .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                     .Select(r => new {
                         Run = r,
                         Weight = (double)r.WorldRank / r.TotalGlobalRunners,
-                        Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
+                        // NEW: Clamp ensures the prestige is strictly between 0 and 100.
+                        Prestige = Math.Clamp((1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0, 0, 100)
                     })
                     .OrderBy(x => x.Weight)
                     .Take(20)
@@ -51,12 +51,12 @@ public static class PlayerCommands
             }
             else if (subCommand.Name == "players")
             {
-                // UPDATED: Only sum prestige from Main Boards
                 var playersScore = allRuns
                     .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                     .GroupBy(r => r.RunnerName)
                     .Select(g => {
-                        double totalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0);
+                        // NEW: Clamp each run's score before summing
+                        double totalPrestige = g.Sum(r => Math.Clamp((1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0, 0, 100));
                         return new { RunnerName = g.Key, TotalPrestige = totalPrestige, RunCount = g.Count() };
                     })
                     .OrderByDescending(x => x.TotalPrestige)
@@ -92,13 +92,13 @@ public static class PlayerCommands
             var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
             if (!pRuns.Any()) { await ctx.Command.FollowupAsync("Corredor no encontrado."); return; }
 
-            // UPDATED: Calculate Total Prestige using only Main Boards
             var allPlayersPrestige = all
                 .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                 .GroupBy(r => r.RunnerName)
                 .Select(g => new {
                     RunnerName = g.Key,
-                    TotalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0)
+                    // NEW: Clamp each run's score before summing for total player ranking
+                    TotalPrestige = g.Sum(r => Math.Clamp((1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0, 0, 100))
                 })
                 .OrderByDescending(x => x.TotalPrestige)
                 .ToList();
@@ -118,7 +118,8 @@ public static class PlayerCommands
                 .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                 .Select(r => new {
                     RunLink = r.RunLink,
-                    Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
+                    // NEW: Clamp
+                    Prestige = Math.Clamp((1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0, 0, 100)
                 })
                 .OrderByDescending(x => x.Prestige)
                 .ToList();
@@ -133,8 +134,10 @@ public static class PlayerCommands
                 {
                     if (FormattingUtils.IsEligibleForPrestige(run.GameFullName, run.CategoryName))
                     {
-                        double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
-                        double runPrestige = (1.0 - runWeight) * 100.0;
+                        // Safely calculate weight and clamp percentage
+                        double rawWeight = (double)run.WorldRank / run.TotalGlobalRunners;
+                        double runWeight = Math.Clamp(rawWeight, 0, 1);
+                        double runPrestige = Math.Clamp((1.0 - runWeight) * 100.0, 0, 100);
 
                         int runCountryRank = allRunsRanked.FindIndex(x => x.RunLink == run.RunLink) + 1;
                         string runCountryRankText = runCountryRank > 0 ? $"\n🏅 Run top `#{runCountryRank}` del país" : "";
