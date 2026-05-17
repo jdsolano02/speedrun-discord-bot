@@ -54,24 +54,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             {
                 await Task.Delay(3000);
 
-                using (var scope = _serviceProvider.CreateScope())
-                {
-                    var db = scope.ServiceProvider.GetRequiredService<SpeedrunContext>();
-                    var bannedWords = new[] { "Meme", "Break Dirt" };
-
-                    var allRuns = db.Runs.ToList();
-                    var runsToKill = allRuns.Where(r => bannedWords.Any(b =>
-                        (r.CategoryName != null && r.CategoryName.Contains(b, StringComparison.OrdinalIgnoreCase)) ||
-                        (r.GameFullName != null && r.GameFullName.Contains(b, StringComparison.OrdinalIgnoreCase)))).ToList();
-
-                    if (runsToKill.Any())
-                    {
-                        db.Runs.RemoveRange(runsToKill);
-                        await db.SaveChangesAsync();
-                        Console.WriteLine($"🗑️ [MEME-CLEANER] Purged {runsToKill.Count} banned runs from database on startup.");
-                    }
-                }
-
                 var setupCommand = new SlashCommandBuilder().WithName("setup").WithDescription("Configure bot channels and roles for this server.")
                     .AddOption("new_records_announcement", ApplicationCommandOptionType.Channel, "Channel for record notifications.", isRequired: true)
                     .AddOption("rankings", ApplicationCommandOptionType.Channel, "Channel for ranking and player commands.", isRequired: true)
@@ -160,7 +142,6 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
             bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
 
-            // NEW: Instantiating the unified Command Context for isolated SRP Handlers
             var ctx = new BotCommandContext(command, scope.ServiceProvider, db, repo, gConfig!, isAdmin, isDataHelper, _client, _syncedRunnersPath, UpdateAllGuildPlayerCounts);
 
             switch (command.CommandName)

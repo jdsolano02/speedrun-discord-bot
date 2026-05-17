@@ -15,8 +15,9 @@ public static class PlayerCommands
 
             if (subCommand.Name == "runs")
             {
+                // UPDATED: Only Main Boards count towards Top Runs
                 var validRuns = allRuns
-                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                     .Select(r => new {
                         Run = r,
                         Weight = (double)r.WorldRank / r.TotalGlobalRunners,
@@ -31,7 +32,7 @@ public static class PlayerCommands
                 var embed = new EmbedBuilder()
                     .WithTitle("🌟 Top 20 Mejores Runs de Costa Rica")
                     .WithColor(Color.Magenta)
-                    .WithDescription("Calculado mediante percentil global (`Rank Global / Total Runners`).\n\n");
+                    .WithDescription("Calculado mediante percentil global de los Main Leaderboards.\n\n");
 
                 var sb = new StringBuilder();
                 int rankIndex = 1;
@@ -50,8 +51,9 @@ public static class PlayerCommands
             }
             else if (subCommand.Name == "players")
             {
+                // UPDATED: Only sum prestige from Main Boards
                 var playersScore = allRuns
-                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                    .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                     .GroupBy(r => r.RunnerName)
                     .Select(g => {
                         double totalPrestige = g.Sum(r => (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0);
@@ -66,14 +68,14 @@ public static class PlayerCommands
                 var embed = new EmbedBuilder()
                     .WithTitle("🎖️ Top 20 Jugadores por Prestigio Total")
                     .WithColor(Color.Gold)
-                    .WithDescription("Calculado sumando el prestigio de *todas* las runs del jugador.\n\n");
+                    .WithDescription("Calculado sumando el prestigio de los Main Leaderboards del jugador.\n\n");
 
                 var sb = new StringBuilder();
                 int rankIndex = 1;
                 foreach (var p in playersScore)
                 {
                     string medal = rankIndex switch { 1 => "🥇", 2 => "🥈", 3 => "🥉", _ => $"**{rankIndex}.**" };
-                    sb.AppendLine($"{medal} **{p.RunnerName}** - `{p.TotalPrestige:F0} pts` *(en {p.RunCount} runs)*");
+                    sb.AppendLine($"{medal} **{p.RunnerName}** - `{p.TotalPrestige:F0} pts` *(en {p.RunCount} main runs)*");
                     rankIndex++;
                 }
 
@@ -90,8 +92,9 @@ public static class PlayerCommands
             var pRuns = all.Where(r => r.RunnerName.Equals(user, StringComparison.OrdinalIgnoreCase)).ToList();
             if (!pRuns.Any()) { await ctx.Command.FollowupAsync("Corredor no encontrado."); return; }
 
+            // UPDATED: Calculate Total Prestige using only Main Boards
             var allPlayersPrestige = all
-                .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                 .GroupBy(r => r.RunnerName)
                 .Select(g => new {
                     RunnerName = g.Key,
@@ -112,7 +115,7 @@ public static class PlayerCommands
                 .WithColor(Color.Purple).WithThumbnailUrl(pRuns[0].GameThumbnail);
 
             var allRunsRanked = all
-                .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0)
+                .Where(r => r.TotalGlobalRunners > 0 && r.WorldRank > 0 && FormattingUtils.IsEligibleForPrestige(r.GameFullName, r.CategoryName))
                 .Select(r => new {
                     RunLink = r.RunLink,
                     Prestige = (1.0 - ((double)r.WorldRank / r.TotalGlobalRunners)) * 100.0
@@ -128,13 +131,27 @@ public static class PlayerCommands
                 string weightDisplay = "";
                 if (run.TotalGlobalRunners > 0 && run.WorldRank > 0)
                 {
-                    double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
-                    double runPrestige = (1.0 - runWeight) * 100.0;
+                    if (FormattingUtils.IsEligibleForPrestige(run.GameFullName, run.CategoryName))
+                    {
+                        double runWeight = (double)run.WorldRank / run.TotalGlobalRunners;
+                        double runPrestige = (1.0 - runWeight) * 100.0;
 
-                    int runCountryRank = allRunsRanked.FindIndex(x => x.RunLink == run.RunLink) + 1;
-                    string runCountryRankText = runCountryRank > 0 ? $"\n🏅 Run top `#{runCountryRank}` del país" : "";
+                        int runCountryRank = allRunsRanked.FindIndex(x => x.RunLink == run.RunLink) + 1;
+                        string runCountryRankText = runCountryRank > 0 ? $"\n🏅 Run top `#{runCountryRank}` del país" : "";
 
-                    weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%){runCountryRankText}";
+                        weightDisplay = $"\n⚖️ Prestigio: `{runPrestige:F2} pts` (Top {runWeight * 100:F1}%){runCountryRankText}";
+                    }
+                    else
+                    {
+                        weightDisplay = $"\n⚖️ Prestigio: `0.00 pts` *(Categoría For Fun / Extensión)*";
+                    }
+                }
+                else
+                {
+                    if (!FormattingUtils.IsEligibleForPrestige(run.GameFullName, run.CategoryName))
+                    {
+                        weightDisplay = $"\n⚖️ Prestigio: `0.00 pts` *(Categoría For Fun / Extensión)*";
+                    }
                 }
 
                 embed.AddField(run.GameFullName, $"**{run.CategoryName}**: {FormattingUtils.FormatTime(run.TimeInSeconds)}\n🇨🇷 Rank CR: #{natRank} | 🌍 Global: #{run.WorldRank} de {run.TotalGlobalRunners}{weightDisplay}");
