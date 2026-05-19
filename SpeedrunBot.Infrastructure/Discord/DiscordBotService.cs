@@ -107,11 +107,15 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
                 var helpCommand = new SlashCommandBuilder().WithName("help").WithDescription("Display the user guide.");
                 var devCommand = new SlashCommandBuilder().WithName("dev").WithDescription("Información sobre el desarrollador.");
 
+                // NEW: Export socials command for administrators
+                var exportSocialsCommand = new SlashCommandBuilder().WithName("export_socials").WithDescription("Exporta un CSV con las redes sociales de todos los runners (Admins).")
+                    .WithDefaultMemberPermissions(GuildPermission.Administrator);
+
                 var commands = new ApplicationCommandProperties[]
                 {
                     setupCommand.Build(), updateCommand.Build(), registerCommand.Build(), rankCommand.Build(),
                     nrCommand.Build(), playerCommand.Build(), playersCommand.Build(), gameCommand.Build(),
-                    topCommand.Build(), helpCommand.Build(), devCommand.Build()
+                    topCommand.Build(), helpCommand.Build(), devCommand.Build(), exportSocialsCommand.Build()
                 };
 
                 await _client.BulkOverwriteGlobalApplicationCommandsAsync(commands);
@@ -142,13 +146,14 @@ public class DiscordBotService : IHostedService, IDiscordNotifier
             bool isAdmin = gUser!.GuildPermissions.Administrator || gUser.Guild.OwnerId == gUser.Id;
             bool isDataHelper = isAdmin || (gConfig != null && gConfig.DataMakerRoleId > 0 && gUser.Roles.Any(r => r.Id == gConfig.DataMakerRoleId));
 
-            var ctx = new BotCommandContext(command, scope.ServiceProvider, db, repo, gConfig!, isAdmin, isDataHelper, _client, _syncedRunnersPath, UpdateAllGuildPlayerCounts);
+            var ctx = new BotCommandContext(command, _serviceProvider, db, repo, gConfig!, isAdmin, isDataHelper, _client, _syncedRunnersPath, UpdateAllGuildPlayerCounts);
 
             switch (command.CommandName)
             {
                 case "setup":
                 case "update":
                 case "register":
+                case "export_socials": // NEW: Route export command to AdminCommands handler
                     await AdminCommands.HandleAsync(ctx);
                     break;
                 case "ranking":

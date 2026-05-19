@@ -1,8 +1,12 @@
 ﻿using Discord;
 using Microsoft.Extensions.DependencyInjection;
+using SpeedrunBot.Application.Interfaces;
 using SpeedrunBot.Application.UseCases;
 using SpeedrunBot.Domain.Entities;
 using System.Text;
+using System.IO;
+using System.Net.Http;
+using System.Text.Json;
 
 namespace SpeedrunBot.Infrastructure.Discord.Commands;
 
@@ -69,7 +73,7 @@ public static class AdminCommands
                     using var bg = ctx.ScopeProvider.CreateScope();
                     var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
                     foreach (var m in missing) { try { await reg.ExecuteAsync(m); await File.AppendAllLinesAsync(ctx.SyncedRunnersPath, new[] { m }); await Task.Delay(2000); } catch { } }
-                    if (await ctx.Client.GetChannelAsync(ctx.GuildConfig.RegisterChannelId) is IMessageChannel ch)
+                    if (await ctx.Client.GetChannelAsync(ctx.Command.ChannelId ?? 0) is IMessageChannel ch)
                         await ch.SendMessageAsync($"🔔 **Sincronización finalizada:** {missing.Count} runners importados.");
                     await ctx.UpdateCensusAction();
                 });
@@ -83,10 +87,67 @@ public static class AdminCommands
                     using var bg = ctx.ScopeProvider.CreateScope();
                     var reg = bg.ServiceProvider.GetRequiredService<RegisterUser>();
                     foreach (var r in allRunners) { try { await reg.ExecuteAsync(r); await Task.Delay(2000); } catch { } }
-                    if (await ctx.Client.GetChannelAsync(ctx.GuildConfig.RegisterChannelId) is IMessageChannel ch)
+                    if (await ctx.Client.GetChannelAsync(ctx.Command.ChannelId ?? 0) is IMessageChannel ch)
                         await ch.SendMessageAsync($"🔔 **Actualización masiva completada.** Datos de PBs actualizados.");
                 });
             }
+        }
+        else if (ctx.Command.CommandName == "export_socials")
+        {
+            if (!ctx.IsAdmin) { await ctx.Command.FollowupAsync("🚫 Solo para Administradores."); return; }
+
+            await ctx.Command.FollowupAsync("⏳ **Iniciando extracción de redes sociales...**\n*Esto tomará un par de minutos para no saturar la API de Speedrun.com (HTTP 429). El archivo se enviará por aquí cuando esté listo.*");
+
+            _ = Task.Run(async () => {
+                try
+                {
+                    // FIXED: Creating scope from Root Provider ensures it survives 
+                    // even after the original command context is disposed
+                    using var bg = ctx.ScopeProvider.CreateScope();
+                    var repo = bg.ServiceProvider.GetRequiredService<IRunRepository>();
+
+                    var allRuns = await repo.GetRankingAsync("", "");
+                    var uniqueRunners = allRuns.Select(r => new { r.RunnerId, r.RunnerName }).Distinct().ToList();
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine("RunnerName,Twitch,YouTube,Twitter,SpeedrunComProfile");
+
+                    using var httpClient = new HttpClient { BaseAddress = new Uri("https://www.speedrun.com/api/v1/") };
+
+                    foreach (var runner in uniqueRunners)
+                    {
+                        try
+                        {
+                            var response = await httpClient.GetAsync($"users/{runner.RunnerId}");
+                            if (response.IsSuccessStatusCode)
+                            {
+                                var json = await response.Content.ReadAsStringAsync();
+                                using var doc = JsonDocument.Parse(json);
+                                var data = doc.RootElement.GetProperty("data");
+
+                                string twitch = data.TryGetProperty("twitch", out var tw) && tw.ValueKind != JsonValueKind.Null ? tw.GetProperty("uri").GetString() ?? "" : "";
+                                string youtube = data.TryGetProperty("youtube", out var yt) && yt.ValueKind != JsonValueKind.Null ? yt.GetProperty("uri").GetString() ?? "" : "";
+                                string twitter = data.TryGetProperty("twitter", out var twi) && twi.ValueKind != JsonValueKind.Null ? twi.GetProperty("uri").GetString() ?? "" : "";
+                                string weblink = data.TryGetProperty("weblink", out var web) && web.ValueKind != JsonValueKind.Null ? web.GetString() ?? "" : "";
+
+                                sb.AppendLine($"{runner.RunnerName},{twitch},{youtube},{twitter},{weblink}");
+                            }
+                            await Task.Delay(1500);
+                        }
+                        catch { /* Ignore */ }
+                    }
+
+                    if (await ctx.Client.GetChannelAsync(ctx.Command.ChannelId ?? 0) is IMessageChannel ch)
+                    {
+                        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(sb.ToString()));
+                        await ch.SendFileAsync(stream, "socials_costa_rica.csv", "✅ **Extracción completada.** Aquí tenés la lista de contactos de todos los runners:");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Error exportando socials: {ex.Message}");
+                }
+            });
         }
     }
 }
